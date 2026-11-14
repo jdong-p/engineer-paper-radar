@@ -831,8 +831,8 @@ def deploy_status(cfg):
 
 # ---------- the actions, one at a time, in a background worker ----------
 
-ACTIONS = {"rescore_and_seed": "▶ Run & Update My Dashboard", "pull_data_repo": "📥 Read / Pull Shared Repos",
-           "sync_data_repo": "🔄 Full Sync with My Private Repo", "daily": "🌐 Fetch New Papers Now",
+ACTIONS = {"rescore_and_seed": "▶ Run & Update Dashboard", "pull_data_repo": "📥 Read / Pull Shared Repos",
+           "sync_data_repo": "🔄 Full Sync (Pull + Push)", "daily": "🌐 Fetch New Papers Now",
            "init_data_repo": "✨ Create / Init My Private Repo",
            "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Full Topic Dive (6 Classics + 8 SOTA)",
            "drop_topic": "🗑 Delete Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers",
@@ -1179,7 +1179,9 @@ def page_data(cfg):
             "raw": raw_config(), "paths": PATHS, "here": str(HERE), "gui_port": GUI_PORT, "data_url": DATA_URL,
             "commands": commands(cfg), "actions": ACTIONS, "max_pillars": MAX_PILLARS, "fixed_pillars": fixed_pillars(),
             "presets": presets.summary(), "preset_changes": _preset_changes(cfg),
-            "sync": sync if sync.get("hosts") else {}}
+            "sync": sync if sync.get("hosts") else {}, "name": NAME, "report_day": cfg.get("report_day") or "Friday",
+            "venues": [{"short": v.get("short") or v.get("name") or "?", "name": v.get("name") or "",
+                        "source": v.get("source") or ""} for v in cfg.get("venues") or [] if isinstance(v, dict)]}
 
 
 def write_startup(cfg, log=print):
@@ -1199,24 +1201,29 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.9</span></h1>
-<a class="btn" href="DASHBOARD.html">📊 Open Dashboard ↗</a>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.0</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
-<button class="btn primary" id="savebtn" onclick="save()">💾 Save config.json</button>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
 <main class="cc">
-<section class="card" id="c-deploy"></section>
-<section class="card" id="c-status"></section>
-<section class="card" id="c-run"></section>
+<section class="card cockpit" id="c-status"></section>
 <section class="card" id="c-console" hidden></section>
-<section class="card" id="c-topic"></section>
-<section class="card" id="c-preset"></section>
-<section class="card" id="c-plan"></section>
-<section class="card" id="c-themes"></section>
-<section class="card" id="c-people"></section>
-<section class="card" id="c-repo"></section>
-<section class="card" id="c-search"></section>
+<div class="stepbar"><h2>🧩 Setup in 4 steps</h2><span class="muted small">finished steps fold into one line; click a step to open it</span>
+<button class="btn small" id="toggleall" onclick="toggleAll()">⊞ Expand All</button></div>
+<details class="step-card" id="s1"><summary><span class="snum">1</span><span class="stitle">Step 1 · Basic Profile &amp; Discipline Preset <em>(Required)</em></span>
+<span class="sbadge" id="s1b"></span><span class="sarrow">▸</span><span class="ssum" id="s1s"></span></summary>
+<div class="sbody"><section id="c-profile"></section><section id="c-preset"></section></div></details>
+<details class="step-card" id="s2"><summary><span class="snum">2</span><span class="stitle">Step 2 · Private Shared Repo &amp; Team Sync <em>(Recommended for Teams)</em></span>
+<span class="sbadge" id="s2b"></span><span class="sarrow">▸</span><span class="ssum" id="s2s"></span></summary>
+<div class="sbody"><section id="c-repo"></section></div></details>
+<details class="step-card" id="s3"><summary><span class="snum">3</span><span class="stitle">Step 3 · Research Pillars &amp; 0-Token Keyword Planner <em>(Required)</em></span>
+<span class="sbadge" id="s3b"></span><span class="sarrow">▸</span><span class="ssum" id="s3s"></span></summary>
+<div class="sbody"><section id="c-plan"></section><section id="c-people"></section>
+<details class="fine" id="fine"><summary>🎛️ Fine-tune keywords &amp; weights per pillar</summary><section id="c-themes"></section></details>
+<section id="s3act"></section></div></details>
+<details class="step-card" id="s4"><summary><span class="snum">4</span><span class="stitle">Step 4 · Topic Deep-Dive &amp; Advanced Settings <em>(Optional)</em></span>
+<span class="sbadge" id="s4b"></span><span class="sarrow">▸</span><span class="ssum" id="s4s"></span></summary>
+<div class="sbody"><section id="c-topic"></section><section id="c-search"></section><section id="c-advanced"></section><section id="c-deploy"></section></div></details>
 <p class="muted foot">Generated <span id="gen"></span>. Secrets (IEEE key, tokens, <code>.env</code>) are never shown or
 stored here: only whether they are set.</p>
 <footer class="ccfoot"><a href="{REPO_URL}" target="_blank" rel="noopener">⭐ Star on GitHub</a> ·
@@ -1224,7 +1231,7 @@ stored here: only whether they are set.</p>
 <a href="#" onclick="citeModal(); return false;">📖 Cite Paper Radar</a></footer>
 </main><div class="bottombar"><span id="dirty2" class="dirty" hidden>● unsaved changes</span>
 <button class="btn" onclick="save()">💾 Save Config</button>
-<button class="btn primary" data-run="rescore_and_seed" onclick="run('rescore_and_seed')">▶ Run &amp; Update My Dashboard</button></div>
+<button class="btn primary go" data-run="rescore_and_seed" onclick="run('rescore_and_seed')">▶ Run &amp; Update Dashboard</button></div>
 <div id="modal" class="modal" hidden></div><div id="toast" class="toast" hidden></div>
 <script id="cc-data" type="application/json">{blob}</script>
 <script>{JS}</script></body></html>"""
@@ -1282,6 +1289,45 @@ mark{background:var(--citebg);color:inherit;border-radius:3px;padding:0 1px}
 .ccfoot{text-align:center;font-size:12.5px;color:var(--muted);padding:6px 0 18px}.ccfoot a{color:var(--muted)}.ccfoot a:hover{color:var(--accent)}
 pre.bib{background:var(--chip);border-radius:8px;padding:10px;font-size:12.5px;white-space:pre-wrap;user-select:all}
 @media (max-width:700px){.pillar .ph .short{width:90px}.kv{grid-template-columns:1fr}}
+/* v3.1.0: larger type and a calmer layout */
+body.ccp{font-size:16px;line-height:1.55}.ccp .small,.ccp .foot,.ccp .ccfoot{font-size:14px}.ccp .steps .sub{font-size:14.5px}
+.ccp .cc h2{font-size:19px}.ccp .cc h3{font-size:16.5px;margin:16px 0 8px}.ccp .btn{font-size:15px;padding:8px 14px}
+.ccp .btn.small{font-size:14px;padding:4px 10px}.ccp .in{font-size:15px;padding:7px 10px}.ccp .in.mono,.ccp textarea.in{font-size:14px}
+.ccp .chip{font-size:14.5px;padding:2px 4px 2px 11px}.ccp .chip button{font-size:13.5px}.ccp table.mini td,.ccp table.mini th{font-size:14.5px;padding:6px 7px}
+.ccp .kv{font-size:15.5px}.ccp .tag{font-size:13px}.ccp .dirty{font-size:14.5px}.ccp pre.console{font-size:13.5px}
+.btn.go{background:#1e8e3e;border-color:#1e8e3e;color:#fff;font-weight:700}.btn.go:hover{filter:brightness(1.08)}
+.cc .cockpit{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(250px,1fr);gap:16px 22px;border-width:2px;padding:16px 18px}
+.pods{display:grid;gap:10px;align-content:start}.pod{border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--bg)}
+.ccp .pod h3{margin:0 0 8px;font-size:16.5px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.pod.quiet{opacity:.92}
+.pod .prog{margin:8px 0 4px}.pod p{margin:6px 0 0}
+.spill{display:inline-flex;gap:6px;align-items:center;border-radius:999px;padding:5px 13px;font:inherit;font-size:15px;font-weight:600;
+border:1.5px solid var(--line);background:var(--chip);color:var(--fg);cursor:default;text-align:left}
+button.spill{cursor:pointer}button.spill:hover{border-color:var(--accent)}.spill.ok{border-color:var(--ok)}.spill.bad{border-color:var(--warn);color:var(--warn)}
+.spill.opt{font-weight:500;font-size:14px;color:var(--muted);padding:3px 11px}.spill.opt.on{color:var(--fg)}
+.count{font-size:15px;font-weight:700;border-radius:99px;padding:1px 11px;background:var(--ok);color:#fff}.count.bad{background:var(--warn)}
+.qa{display:flex;flex-direction:column;gap:8px}.qah{font-weight:700;font-size:16.5px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ccp .qa .btn{width:100%;text-align:left;margin:0;font-size:15.5px;padding:10px 14px}.ccp .qa .btn.small{font-size:14px;padding:6px 12px}
+.stepbar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;margin:24px 0 6px}.ccp .stepbar h2{margin:0;font-size:20px}.stepbar #toggleall{margin-left:auto}
+.step-card{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:12px 0;scroll-margin-top:72px}
+.step-card>summary{list-style:none;cursor:pointer;display:flex;gap:8px 12px;align-items:center;flex-wrap:wrap;padding:14px 18px;border-radius:12px}
+.step-card>summary::-webkit-details-marker{display:none}.step-card>summary:hover{background:var(--chip)}
+.step-card[open]>summary{border-bottom:1px solid var(--line);border-radius:12px 12px 0 0}
+.snum{display:inline-flex;width:32px;height:32px;border-radius:50%;align-items:center;justify-content:center;background:var(--accent);color:#fff;font-weight:700;font-size:16px;flex:none}
+.step-card.done .snum{background:var(--ok)}.stitle{font-size:19px;font-weight:700}.stitle em{font-style:normal;font-weight:500;color:var(--muted);font-size:15px}
+.sbadge{font-size:14px;font-weight:700;border-radius:99px;padding:2px 11px;border:1.5px solid var(--line);color:var(--muted)}
+.sbadge.ok{color:var(--ok);border-color:var(--ok)}.sbadge.need{color:var(--warn);border-color:var(--warn)}
+.sarrow{margin-left:auto;color:var(--muted);font-size:18px;transition:transform .2s}.step-card[open]>summary .sarrow{transform:rotate(90deg)}
+.ssum{flex-basis:100%;padding-left:44px;color:var(--muted);font-size:15px}.step-card[open]>summary .ssum{display:none}
+.sbody{padding:4px 18px 16px}.sbody>section{padding:12px 0 4px;border-top:1px dashed var(--line);scroll-margin-top:72px}
+.sbody>section:first-child{border-top:0}.sbody>section:empty{display:none}.ccp .sbody h2{font-size:18px}
+details.how{margin:6px 0 8px;font-size:14.5px}details.how>summary{cursor:pointer;color:var(--accent);font-weight:600;list-style:none;width:max-content;max-width:100%}
+details.how>summary::-webkit-details-marker{display:none}details.how[open]{background:var(--chip);border-radius:10px;padding:8px 12px}
+details.how[open]>summary{margin-bottom:6px}details.how.legendbox{border:0;padding:0}details.how.legendbox[open]{padding:8px 12px}
+details.fine{border:1px solid var(--line);border-radius:12px;padding:0 14px;margin:12px 0;scroll-margin-top:72px}
+details.fine>summary{cursor:pointer;padding:12px 0;font-weight:700;font-size:16.5px}details.fine[open]>summary{border-bottom:1px dashed var(--line)}
+.emailbox{border:2px solid var(--warn);border-radius:12px;padding:12px 14px;margin:10px 0;background:var(--chip)}.emailbox.ok{border-color:var(--ok)}
+.emailbox label{display:block;font-weight:700;font-size:16.5px;margin-bottom:6px}.ccp .emailbox .in{font-size:16px;width:min(100%,380px)}
+@media (max-width:860px){.cc .cockpit{grid-template-columns:1fr}.ssum{padding-left:0}.stitle{font-size:17px}}
 """
 
 JS = r"""
@@ -1410,36 +1456,116 @@ function chips(list, o) {
 // ---------- 1. setup progress ----------
 function tasteOn() { return !!(ST.taste && ST.taste.active); }
 function repoName(u) { return String(u || '').replace(/^https?:\/\/[^/]+\//, '').replace(/^git@[^:]+:/, '').replace(/\.git$/, ''); }
-function renderStatus() {
+function tasteText() {
+  if (!ST.taste) return '⚪ –';
+  return tasteOn() ? `🟢 Trained on ${ST.taste.pos}+ / ${ST.taste.neg}− marks${ST.taste.implicit ? ` + ${ST.taste.implicit} passed-over papers (×${ST.taste.weight})` : ''} (taste:−2…+4 on every score)`
+    : `⚪ ${ST.taste.pos}+ / ${ST.taste.neg}− marks: needs ${ST.taste.need} ✅/⭐/📌, and ${ST.taste.need} 🗄️ archived or passed-over reported papers${ST.taste.enabled ? '' : ' (off in scoring.taste)'}`;
+}
+function spill(cls, text, title, go) { return h(go ? 'button' : 'span', {class: 'spill ' + cls, title: title || '', onclick: go || null}, text); }
+function howBox(...kids) { return h('details', {class: 'how'}, h('summary', {}, '💡 How this works'), h('div', {}, kids)); }
+function renderStatus() {  // v3.1.0: the top cockpit, 3 status pods + the quick actions
   const st = ST.store, env = ST.env, dr = ST.data_repo, p = ST.pillars;
-  const steps = [
-    {ok: st.papers > 0, req: true, t: 'Paper store', s: st.papers > 0
-      ? `${fmt(st.papers)} papers in ${st.file} · ${fmt(st.candidates)} active candidates · ${fmt(st.external)} external`
-        + (dr.connected ? (dr.missing_here ? ` · ⚠️ ${fmt(dr.missing_here)} shared papers not loaded yet (📥 Read from Private Repo)` : ' · ✅ shared corpus loaded') : '')
-      : 'empty: fetch papers (🌐 Fetch New Papers Now), or connect the private data repo below to load the shared corpus'},
-    {ok: p.ready, req: true, t: 'Research pillars', s: p.ready ? `✅ ${p.count} pillars active · ${fmt(p.keywords)} weighted keywords`
-      : '⚠️ Setup required: add your pillars and keywords below, then ▶ Run & Update My Dashboard'},
-    {ok: env.contact_email_set, req: true, t: 'Contact e-mail', s: env.contact_email_set ? '🟢 set (the polite Crossref / OpenAlex pool)'
-      : '⚪ not set: add it below (Crossref and OpenAlex answer faster with a mailto)'},
-    {ok: env.has_ieee_key, req: false, t: 'IEEE API key', s: env.has_ieee_key ? '🟢 Configured (IEEE_API_KEY is set)'
-      : '⚪ Using the Crossref / OpenAlex fallback (optional: set the IEEE_API_KEY environment variable)'},
-    {ok: env.has_claude, req: false, t: 'Claude CLI', s: env.has_claude ? `🟢 Ready (${env.claude_command})`
-      : '⚪ No-LLM mode: scoring, dashboard and seeding work; digests and the weekly synthesis are skipped'},
-    {ok: dr.connected, req: false, t: 'Private data repo', s: dr.connected ? `🟢 Connected (${repoName(dr.remote_url) || 'data repo'}) · ${fmt(dr.papers)} papers · ${dr.peers.length} peer(s)` + (dr.read_repos && dr.read_repos.length ? ` · ${dr.read_repos.length} shared repo(s) to read` : '')
-      : '⚪ Not set up (optional): create your own private repo or clone a shared one below'},
-    {ok: tasteOn(), req: false, t: 'Taste model', s: ST.taste ? (tasteOn() ? `🟢 Trained on ${ST.taste.pos}+ / ${ST.taste.neg}− marks${ST.taste.implicit ? ` + ${ST.taste.implicit} passed-over papers (×${ST.taste.weight})` : ''} (taste:−2…+4 on every score)`
-      : `⚪ ${ST.taste.pos}+ / ${ST.taste.neg}− marks: needs ${ST.taste.need} ✅/⭐/📌, and ${ST.taste.need} 🗄️ archived or passed-over reported papers${ST.taste.enabled ? '' : ' (off in scoring.taste)'}`) : '⚪ –'},
-  ];
-  const req = steps.filter(x => x.req), done = req.filter(x => x.ok).length;
-  const all = steps.filter(x => x.ok).length;
-  fill($('#c-status'), 
-    h('h2', {}, '🧭 Setup Progress & Readiness', h('span', {class: 'muted small'}, `${done}/${req.length} required · ${all}/${steps.length} overall`)),
-    h('div', {class: 'prog'}, h('i', {style: `width:${Math.round(100 * (done + 0.25 * (all - done)) / (req.length + 0.25 * (steps.length - req.length)))}%`})),
-    h('ul', {class: 'steps'}, steps.map(x => h('li', {}, h('span', {class: 'ic'}, x.ok ? '✅' : (x.req ? '⚠️' : '⚪')),
-      h('div', {}, h('b', {}, x.t), ' ', h('span', {class: 'sub'}, x.s))))),
-    !env.has_git ? h('p', {class: 'warn small'}, '⚠️ git is not on PATH: the private data repo needs Git (https://git-scm.com).') : null);
+  const req = [st.papers > 0, !!p.ready, !!env.contact_email_set], done = req.filter(Boolean).length;
+  const rr = (dr.read_repos || []).length, np = dr.peers.length, adv = () => openTo('#c-advanced');
+  const pods = h('div', {class: 'pods'},
+    h('div', {class: 'pod'}, h('h3', {}, '🎯 Required Setup', h('span', {class: 'count' + (done < 3 ? ' bad' : '')}, `${done}/3 Ready`)),
+      h('div', {class: 'chips'},
+        spill(req[0] ? 'ok' : 'bad', `📚 Paper Store (${fmt(st.papers)} papers)`, req[0] ? `${st.file} · ${fmt(st.candidates)} active candidates · ${fmt(st.external)} external`
+          : 'Empty: 🌐 Fetch New Papers Now, or load a shared corpus in Step 2', req[0] ? null : () => openTo('#c-repo')),
+        spill(req[1] ? 'ok' : 'bad', `🧭 Pillars (${p.ready ? p.count : 0} active)`, req[1] ? `${fmt(p.keywords)} weighted keywords` : 'Step 3: name your pillars and plan their keywords', () => openTo('#c-plan')),
+        spill(req[2] ? 'ok' : 'bad', `✉️ Contact Email (${req[2] ? 'Set' : 'Missing'})`, 'Step 1: Crossref and OpenAlex answer faster with a mailto', () => openTo('#c-profile', '#email'))),
+      h('div', {class: 'prog'}, h('i', {style: `width:${Math.round(100 * done / 3)}%`})),
+      dr.connected && dr.missing_here ? h('p', {class: 'warn small'}, `⚠️ ${fmt(dr.missing_here)} shared papers not loaded yet: 📥 Read / Pull Shared Repos`) : null,
+      !env.has_git ? h('p', {class: 'warn small'}, '⚠️ git is not on PATH: the private data repo needs Git (https://git-scm.com).') : null),
+    h('div', {class: 'pod'}, h('h3', {}, '🤝 Shared Data Repo & Peers'),
+      h('div', {class: 'chips'}, dr.connected
+        ? spill('ok', `🟢 Connected: ${repoName(dr.remote_url) || 'data repo'} · ${np} peer${np === 1 ? '' : 's'}`, `${fmt(dr.papers)} papers in the shared corpus`, () => openTo('#c-repo'))
+        : spill('opt', '⚪ Not connected', 'Optional: create or clone a private data repo in Step 2', () => openTo('#c-repo')),
+        rr ? spill('opt on', `📚 ${rr} shared repo${rr === 1 ? '' : 's'} to read`, 'data_repo.read_repos', () => openTo('#c-repo')) : null)),
+    h('div', {class: 'pod quiet'}, h('h3', {}, '⚙️ Optional Boosters', h('span', {class: 'muted small'}, env.has_claude ? '(Optional)' : '(Optional — 0-Token mode active)')),
+      h('div', {class: 'chips'},
+        spill('opt' + (env.has_ieee_key ? ' on' : ''), (env.has_ieee_key ? '🟢' : '⚪') + ' IEEE API', env.has_ieee_key ? 'IEEE_API_KEY is set' : 'Not set: Crossref / OpenAlex are used instead', adv),
+        spill('opt' + (env.has_claude ? ' on' : ''), (env.has_claude ? '🟢' : '⚪') + ' Claude AI', env.has_claude ? `Ready (${env.claude_command})` : 'No Claude CLI: scoring, dashboard and seeding work; digests and the weekly synthesis are skipped', adv),
+        spill('opt' + (tasteOn() ? ' on' : ''), (tasteOn() ? '🟢' : '⚪') + ' Taste Model', tasteText(), adv))));
+  const qa = h('div', {class: 'qa'}, h('div', {class: 'qah'}, '⚡ Quick Actions', h('span', {class: 'muted small'}, API ? 'run on this computer; output below' : 'static page: each shows its command')),
+    runBtn('rescore_and_seed', null, true, null, 'go'), runBtn('sync_data_repo'), runBtn('pull_data_repo'),
+    h('a', {class: 'btn', href: 'DASHBOARD.html'}, '📊 Open Dashboard ↗'),
+    h('button', {class: 'btn', onclick: () => save()}, '💾 Save Config'),
+    runBtn('daily', null, false, null, 'small'));
+  fill($('#c-status'), pods, qa);
   $('#gen').textContent = ST.generated + (API ? ' (live)' : ' (snapshot in this file)');
 }
+
+// ---------- v3.1.0: Step 1 · profile, Step 4 · venues / schedule / keys, and the step accordions ----------
+function renderProfile() {
+  const ok = /^[^@\s"<>]+@[^@\s"<>]+\.[A-Za-z]{2,}$/.test(S.contact_email || '');
+  fill($('#c-profile'), h('h2', {}, '👤 Basic Profile'),
+    h('div', {class: 'kv'}, h('b', {}, 'Radar'), h('span', {}, D.name || 'Paper Radar', ' ', h('span', {class: 'tag'}, STARTER ? 'Starter Edition' : 'Minisforum radar')),
+      h('b', {}, 'Your name'), h('span', {}, (S.data_repo.peer_id || ST.data_repo.me || '–'), h('span', {class: 'muted small'}, '  (peer_id, set in Step 2)'))),
+    h('div', {class: 'emailbox' + (ok ? ' ok' : '')}, h('label', {for: 'email'}, '✉️ Contact E-mail ', h('span', {class: ok ? 'ok' : 'warn'}, ok ? '✅' : '(required)')),
+      h('input', {class: 'in', id: 'email', type: 'email', value: S.contact_email, placeholder: 'you@example.org',
+        oninput: e => { S.contact_email = e.target.value.trim(); changed(); }, onchange: () => renderProfile()}),
+      h('div', {class: 'muted small'}, 'Sent only to Crossref / OpenAlex (their “polite pool”: faster answers), never to anyone else.')),
+    h('div', {class: 'row'}, h('button', {class: 'btn primary', onclick: () => save()}, '💾 Save Step 1'),
+      h('span', {class: 'muted small'}, 'then pick your discipline below (Apply saves it right away)')));
+}
+function renderAdvanced() {
+  const env = ST.env, V = D.venues || [];
+  fill($('#c-advanced'), h('h2', {}, '📚 Venues, Schedule & Optional API Keys'),
+    h('h3', {}, `Venues (${V.length})`),
+    V.length ? h('div', {class: 'chips'}, V.map(v => h('span', {class: 'chip', title: v.name + (v.source ? ' · source: ' + v.source : '')}, h('span', {class: 't'}, '☑ ' + v.short))))
+      : h('p', {class: 'muted small'}, 'No venues configured.'),
+    h('p', {class: 'muted small'}, 'A 🧭 domain preset (Step 1) can replace this list; for single venues edit "venues" in config.json.'),
+    h('h3', {}, '🗓️ Schedule'),
+    h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, STARTER ? 'Unattended runs: README → “Weekly radar and scheduled runs”.' : 'The Minisforum runs the daily task and the Friday sync on its own.'),
+    h('h3', {}, '🔑 Optional boosters'),
+    h('div', {class: 'kv'}, h('b', {}, 'IEEE API'), h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set' : '⚪ not set (optional): set the IEEE_API_KEY environment variable; README → “Free IEEE API key”'),
+      h('b', {}, 'Claude AI'), h('span', {}, env.has_claude ? `🟢 Ready (${env.claude_command})` : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work)'),
+      h('b', {}, 'Taste model'), h('span', {}, tasteText())),
+    h('p', {class: 'muted small'}, 'Keys are never shown or stored on this page: only whether they are set.'));
+}
+let AUTO = true;  // smart auto-collapse until the user opens or closes a step, or the live data has arrived
+function stepInfo() {
+  const env = ST.env, dr = ST.data_repo, p = ST.pillars, T = ST.topics || {dives: []}, rr = (dr.read_repos || []).length;
+  const pr = (D.presets || []).find(x => x.key === S.domain_preset);
+  return [
+    {id: 's1', req: true, done: !!env.contact_email_set, sum: `${pr ? pr.icon + ' ' + pr.label : 'no preset'} · ✉️ ${env.contact_email_set ? 'e-mail set' : 'e-mail missing'}`},
+    {id: 's2', req: false, done: !!dr.connected || rr > 0, sum: dr.connected ? `🟢 ${repoName(dr.remote_url) || 'data repo'} · ${dr.peers.length} peer(s)` + (rr ? ` · ${rr} shared repo(s) to read` : '')
+      : (rr ? `📚 ${rr} shared repo(s) to read · no primary repo` : '⚪ Not connected: solo use works fine')},
+    {id: 's3', req: true, done: !!p.ready, sum: p.ready ? `${p.count} pillars · ${fmt(p.keywords)} weighted keywords · ${S.anchors.length} anchors · ${S.vip_authors.length} VIP authors` : 'name your pillars and plan their keywords'},
+    {id: 's4', req: false, opt: true, done: false, sum: `🔎 ${T.dives.length} topic dive(s) · 📚 ${(D.venues || []).length} venues · ${S.deployment === 'mesh_lan' ? '🌐 Mesh LAN' : '💻 Single PC'}`}];
+}
+function renderSteps() {
+  const fresh = !(ST.store.papers > 0) && !ST.pillars.ready;
+  for (const x of stepInfo()) {
+    const el = $('#' + x.id), b = $('#' + x.id + 'b'); if (!el) continue;
+    el.classList.toggle('done', x.done);
+    b.className = 'sbadge' + (x.done ? ' ok' : (x.req ? ' need' : ''));
+    b.textContent = x.done ? '✅ Complete' : (x.req ? '⚠️ Needs setup' : (x.opt ? '⚪ Optional' : '⚪ Not set up'));
+    $('#' + x.id + 's').textContent = x.sum;
+    if (AUTO) el.open = x.opt ? false : (fresh ? true : (x.req && !x.done));
+  }
+  fill($('#s3act'), h('div', {class: 'runbar'}, h('button', {class: 'btn', onclick: () => save()}, '💾 Save Config'),
+    runBtn('rescore_and_seed', null, true, '💾 ▶ Save, Rescore & Update Dashboard', 'go'),
+    h('span', {class: 'muted small'}, 'saves, re-scores every paper, tops up each pillar, rebuilds DASHBOARD.html (0 tokens)')));
+  updToggle();
+}
+function openTo(sel, focus) {
+  const e = $(sel); if (!e) return;
+  for (let d = e.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
+  AUTO = false; updToggle();
+  e.scrollIntoView({behavior: 'smooth', block: 'start'});
+  if (focus) { const f = $(focus); if (f) setTimeout(() => f.focus({preventScroll: true}), 350); }
+}
+function updToggle() {
+  const b = $('#toggleall'); if (b) b.textContent = [...document.querySelectorAll('.step-card')].every(d => d.open) ? '⊟ Collapse All' : '⊞ Expand All';
+}
+function toggleAll() {
+  const all = [...document.querySelectorAll('.step-card')], open = !all.every(d => d.open);
+  all.forEach(d => { d.open = open; }); AUTO = false; updToggle();
+}
+document.querySelectorAll('.step-card').forEach(d => d.addEventListener('toggle', updToggle));
+document.querySelectorAll('.step-card>summary').forEach(x => x.addEventListener('click', () => { AUTO = false; }));
 
 // ---------- run bar + console ----------
 const RUN_TIPS = {
@@ -1451,15 +1577,9 @@ const RUN_TIPS = {
   topic_recall: '--recall: search the whole local store (archived papers and the corpus included) for this topic. 0 API calls, 0 tokens; writes Topic_Dives/<date>_recall_<topic>.html.',
   topic_dive: '--topic: local store + OpenAlex (+ IEEE reserve / PubMed), 6 classics + 8 recent papers, Claude synthesis (or 0-token tables), lineage map, and the dashboard\'s 🔎 Topic Dives.',
   drop_topic: '--drop-topic: remove a dive from 🔎 Topic Dives.'};
-function runBtn(a, extra, primary) {
-  return h('button', {class: 'btn' + (primary ? ' primary' : ''), title: RUN_TIPS[a], 'data-run': a,
-    onclick: () => run(a, extra)}, D.actions[a]);
-}
-function renderRun() {
-  fill($('#c-run'), h('h2', {}, '🚀 Run', h('span', {class: 'muted small'}, API ? 'runs on this computer; output below'
-      : 'static page: shows the commands to run (or start Start_Radar_GUI for one-click runs)')),
-    h('div', {class: 'runbar'}, runBtn('rescore_and_seed', null, true), runBtn('daily'), runBtn('pull_data_repo'), runBtn('sync_data_repo')));
-  lockRun();
+function runBtn(a, extra, primary, label, cls) {
+  return h('button', {class: 'btn' + (primary ? ' primary' : '') + (cls ? ' ' + cls : ''), title: RUN_TIPS[a], 'data-run': a,
+    onclick: () => run(a, extra)}, label || D.actions[a]);
 }
 function lockRun() { document.querySelectorAll('[data-run]').forEach(b => { b.disabled = !!(API && (JOB.running || ACT)); }); }
 // a run this page didn't start (scheduled task, terminal, another window): stream .run.log until it ends
@@ -1504,7 +1624,7 @@ function showCommands(a, extra) {
   if (extra && extra.clone_url) lines.push(`git clone ${extra.clone_url} "${extra.clone_dir || ST.data_repo.default_dir || '../ic-paper-radar-data'}"`);
   lines.push(...D.commands[a]);
   showConsole(`${D.actions[a]}: run these commands`, null, [
-    h('p', {class: 'small'}, isDirty() ? '⚠️ First click 💾 Save config.json and put the file in the radar folder (replace config.json there). ' : '',
+    h('p', {class: 'small'}, isDirty() ? '⚠️ First click 💾 Save Config and put the file in the radar folder (replace config.json there). ' : '',
       STARTER ? h('span', {}, 'Easiest: double-click ', h('b', {}, isWin ? 'Start_Radar_GUI.cmd' : 'Start_Radar_GUI.command'),
         ' in the radar folder: it opens this page with working buttons. Or, in a terminal:')
         : 'This page could not reach radar_sync_server.py (PaperRadar_SyncServer). Start it, open this page from the server, or run on the Minisforum:'),
@@ -1604,7 +1724,8 @@ function renderThemes() {
       h('span', {class: 'muted small'}, 'kept as they are; add a pillar or move them')), chips(o.kws, kwOpts(o.kws))));
   fill($('#c-themes'), 
     h('h2', {}, '🎯 My Research Themes & Keywords'),
-    h('p', {class: 'muted small'}, 'A paper\'s score is the sum of the weights of the keywords in its title, abstract and index terms (word match, case-insensitive unless ALL CAPS; a space or hyphen matches either; plurals match). The pillar with the most hits files it. Weights: 5 = defining term, 3–4 = strong, 1–2 = generic. ',
+    h('p', {class: 'muted small'}, 'Click a weight to change it; ⇄ moves a keyword to another pillar.'),
+    howBox('A paper\'s score is the sum of the weights of the keywords in its title, abstract and index terms (word match, case-insensitive unless ALL CAPS; a space or hyphen matches either; plurals match). The pillar with the most hits files it. Weights: 5 = defining term, 3–4 = strong, 1–2 = generic. ',
       h('span', {class: 'tip', title: 're:<label>::<regex> is a raw (Python) regular expression, case-sensitive unless it starts with (?i). The label is what the report shows.'}, 'Regex keywords?')),
     FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar (catalog.py; their cached digests name them); their keywords are editable. Add new pillars after them.`) : null,
     h('div', {class: 'row'}, h('button', {class: 'btn primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
@@ -1828,7 +1949,8 @@ function renderTopic() {
       h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
         zbox, noClaude ? ' 0-Token Fast Mode (no Claude CLI found)' : ' 0-Token Fast Mode (--no-claude)')),
     h('div', {class: 'muted small', id: 'topicgroups'}, API ? 'Type a question to see how it is split into concept groups.' : ''),
-    h('p', {class: 'muted small'}, '⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
+    h('p', {class: 'muted small'}, '⚡ Recall: your local store, 0 API calls · 🔎 Deep-Dive: + OpenAlex, 6 classics + 8 recent papers.'),
+    howBox('⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
       '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ' (and PubMed for BioMed), picks 6 🏛️ classics + 8 🚀 recent papers, ' +
       'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
     result,
@@ -1871,9 +1993,9 @@ function renderPlan() {
       h('button', {title: 'Remove anchor', onclick: () => { S.anchors.splice(i, 1); changed(); renderPeople(); }}, '✕'))))
     : h('p', {class: 'muted small'}, 'No anchors yet: 2–5 papers you love make the plan much better.');
   fill(el, h('h2', {}, '🪄 Quick Keyword Setup', h('span', {class: 'muted small'}, '0 tokens, no AI: from your anchors and a few rough words')),
-    h('div', {class: 'legendbox'}, h('h3', {}, `🎯 How Keyword Weights Work (min_score = ${ms})`), legend,
+    h('details', {class: 'how legendbox'}, h('summary', {}, `💡 How keyword weights work (min_score = ${ms})`), legend,
       h('p', {class: 'muted small'}, `A paper becomes a candidate when the weights of the keywords in its title, abstract and index terms add up to ${ms}: one +5 is enough, +1 words only help in combination. ALL-CAPS keywords match case; a space or hyphen matches either; plurals match.`)),
-    h('h3', {}, 'Step 1 · Name your pillars, add 2–5 anchor DOIs and a few rough seed words'),
+    h('h3', {}, '① Name your pillars, add 2–5 anchor DOIs and a few rough seed words'),
     pillars,
     h('div', {class: 'row'}, h('button', {class: 'btn small', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
       KW.pillars.push({name: '', short: '', marker: null, kws: []}); changed(); renderThemes(); }}, '＋ Add pillar'),
@@ -1881,11 +2003,12 @@ function renderPlan() {
       h('span', {class: 'muted small'}, 'already set up? the guided flow plans keywords for one new pillar and leaves the others untouched')),
     PLAST ? pillarResult() : null,
     h('div', {class: 'row'}, h('span', {class: 'small'}, '🏛️ Anchor DOIs (papers you love):'), doiIn, h('button', {class: 'btn small', onclick: addDoi}, '＋ Add')), anchors,
-    h('h3', {}, 'Step 2 · Let the planner build the weighted keywords'),
+    h('h3', {}, '② Let the planner build the weighted keywords'),
     h('div', {class: 'row'}, h('button', {class: 'btn primary', id: 'planbtn', onclick: planKeywords}, '🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)'),
       h('span', {class: 'muted small'}, 'Reads your paper store (and OpenAlex for anchors it lacks). Nothing is changed until you apply.')),
-    h('h3', {}, 'Step 3 · Review the suggestions and apply'),
-    h('p', {class: 'muted small'}, 'A preview lists weighted keyword chips (+5 down to +1), metric regexes, a negative_override and VIP authors, each with the evidence behind it. Untick what you don\'t want, adjust weights, then ✅ Apply Selected to My Config. Fine-tune anything later in 🎯 My Research Themes & Keywords below.'));
+    h('h3', {}, '③ Review the suggestions and apply'),
+    h('p', {class: 'muted small'}, 'Untick what you don\'t want, then ✅ Apply Selected to My Config.'),
+    howBox('A preview lists weighted keyword chips (+5 down to +1), metric regexes, a negative_override and VIP authors, each with the evidence behind it. Untick what you don\'t want, adjust weights, then ✅ Apply Selected to My Config. Fine-tune anything later in 🎛️ Fine-tune keywords & weights below.'));
 }
 async function planKeywords() {
   const pillars = KW.pillars.map((p, i) => ({name: (p.name || '').trim(), seeds: seedsOf(p, i).split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)}));
@@ -1989,9 +2112,7 @@ function renderPeople() {
           oninput: e => { S.vip_boost = Number(e.target.value); changed(); }})), h('span', {class: 'muted small'}, 'added to the score of a paper by a VIP author.'))),
       h('div', {}, h('h3', {}, `Anchor DOIs (${S.anchors.length}) `, h('span', {class: 'tip muted small', title: 'Classic papers always kept in the catalog (🏛️ = pinned as anchor, 📌 = pinned by you, ⏳ = fetched on the next run). They get anchor_boost.'}, 'ⓘ')),
         h('div', {class: 'row'}, doiIn, h('button', {class: 'btn small', onclick: addDoi}, '＋ Add anchor')),
-        rows.length ? h('div', {class: 'tablewrap'}, h('table', {class: 'mini'}, h('tbody', {}, rows))) : h('p', {class: 'muted small'}, 'No anchors yet.'))),
-    h('div', {class: 'row'}, h('label', {}, 'Contact e-mail ', h('input', {class: 'in', type: 'email', size: 30, value: S.contact_email, placeholder: 'you@example.org',
-      oninput: e => { S.contact_email = e.target.value.trim(); changed(); }})), h('span', {class: 'muted small'}, 'sent to Crossref / OpenAlex in the User-Agent (their “polite pool”); never to anyone else.')));
+        rows.length ? h('div', {class: 'tablewrap'}, h('table', {class: 'mini'}, h('tbody', {}, rows))) : h('p', {class: 'muted small'}, 'No anchors yet.'))));
   renderPlan();
 }
 
@@ -2049,17 +2170,19 @@ function renderRepo() {
           dr.missing_here ? h('span', {class: 'warn'}, ` · ${fmt(dr.missing_here)} not in your store yet`) : (dr.missing_here === 0 ? h('span', {class: 'ok'}, ' · all in your store') : null)),
         h('b', {}, 'Last commit'), dr.commit ? h('span', {}, h('code', {}, dr.commit.hash), ` ${dr.commit.date.replace('T', ' ').slice(0, 16)} · `, h('span', {class: 'muted'}, dr.commit.subject)) : h('span', {class: 'muted'}, '–'),
         h('b', {}, 'You'), h('span', {}, dr.me || '–'))
-    : h('div', {},
+    : h('div', {id: 'repoopts'},
         h('p', {class: 'warn'}, '⚠️ No primary data repo yet', h('span', {class: 'muted small'}, ` (${dr.reason})`)),
         h('h3', {}, '✨ Option 1: create your own private data repo'),
-        h('p', {class: 'small'}, 'Your corpus, your GitHub account: with the GitHub CLI (gh) signed in, the repo is created for you; otherwise create an empty private repo on github.com first. The protocol files, your clean corpus and your overlay are pushed to main.'),
+        h('p', {class: 'small'}, 'With the GitHub CLI (gh) signed in, the repo is created for you.'),
+        howBox('Your corpus, your GitHub account: with the GitHub CLI (gh) signed in, the repo is created for you; otherwise create an empty private repo on github.com first. The protocol files, your clean corpus and your overlay are pushed to main.'),
         (() => {
           const spec = h('input', {class: 'in mono', size: 34, placeholder: 'your-name/my-paper-radar-data', 'aria-label': 'owner/name or URL'});
           return h('div', {class: 'row'}, spec, h('button', {class: 'btn primary', 'data-run': 'init_data_repo', title: RUN_TIPS.init_data_repo,
             onclick: () => { const v = spec.value.trim(); if (!v) return alert('Type owner/name (or a clone URL) first.'); run('init_data_repo', {spec: v}); }}, D.actions.init_data_repo));
         })(),
         h('h3', {}, '📥 Option 2: clone a data repo someone shared with you'),
-        h('p', {class: 'small'}, 'A collaborator with access can clone it here and load the shared corpus (papers, abstracts, digests) without a terminal. Git asks you to sign in to GitHub once. (Read access only? Add it under “Shared repos to read” instead.)'),
+        h('p', {class: 'small'}, 'Git asks you to sign in to GitHub once.'),
+        howBox('A collaborator with access can clone it here and load the shared corpus (papers, abstracts, digests) without a terminal. Git asks you to sign in to GitHub once. (Read access only? Add it under “Shared repos to read” instead.)'),
         (() => {
           const url = h('input', {class: 'in wide mono', value: D.data_url, 'aria-label': 'clone URL'});
           const dir = h('input', {class: 'in wide mono', value: S.data_repo_dir || '../ic-paper-radar-data', 'aria-label': 'clone folder'});
@@ -2080,14 +2203,21 @@ function renderRepo() {
   const ax = STARTER ? S.arxiv : null;
   const rr = (dr.read_repos || []);
   const reads = h('div', {}, h('h3', {}, '📚 Shared repos to read (data_repo.read_repos)'),
-    h('p', {class: 'small muted'}, 'Private data repos your collaborators shared with you (read access is enough): pulled into <data_repo_dir>_peers/ and never pushed. Each one is an isolated dashboard by default (📚 Switch Radar / Repo in the dashboard header; 0 papers enter your store); merge a similar-domain repo into your corpus with “Merge & Sync Corpus”. owner/name, a clone URL or a local folder.'),
+    h('p', {class: 'small muted'}, 'Repos collaborators shared with you (read access is enough): pulled only, never pushed; isolated by default.'),
+    howBox('Private data repos your collaborators shared with you (read access is enough): pulled into <data_repo_dir>_peers/ and never pushed. Each one is an isolated dashboard by default (📚 Switch Radar / Repo in the dashboard header; 0 papers enter your store); merge a similar-domain repo into your corpus with “Merge & Sync Corpus”. owner/name, a clone URL or a local folder.'),
     chips(dro.read_repos, {placeholder: 'colleague/their-paper-radar-data', size: 34,
       check: v => (/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(v) || /^(https:\/\/[A-Za-z0-9.-]+\/|git@[A-Za-z0-9.-]+:)[\w.-]+\/[\w.-]+$/.test(v) || /[\\/]/.test(v)) ? null : 'owner/name, https://…, git@… or a folder'}),
     rr.length ? h('table', {class: 'mini'}, h('tbody', {}, rr.map(x => h('tr', {}, h('td', {class: 'small'}, h('code', {}, x.spec),
       h('div', {class: 'muted small'}, x.error ? h('span', {class: 'warn'}, x.error) : (x.ready ? `${fmt(x.papers)} papers` : '⏳ pulled on the next 📥 Read'))),
       h('td', {}, simNote(x)), h('td', {}, mergeToggle(x)))))) : null);
-  fill($('#c-repo'), h('h2', {}, '🤝 Private Shared Repo & Peer Sync'), head,
-    h('h3', {}, 'Peers'), peers,
+  fill($('#c-repo'), h('h2', {}, '🤝 Private Shared Repo & Peer Sync'),
+    h('div', {class: 'runbar'}, runBtn('pull_data_repo'), runBtn('sync_data_repo', null, false, '🔄 Full Sync with Primary Repo'),
+      !dr.connected ? h('button', {class: 'btn', title: 'Create your own private data repo, or clone one shared with you', onclick: () => {
+        const e = $('#repoopts'); if (!e) return; e.scrollIntoView({behavior: 'smooth', block: 'center'});
+        const i = e.querySelector('input'); if (i) setTimeout(() => i.focus({preventScroll: true}), 350); }}, '📦 Clone / Init') : null),
+    h('p', {class: 'muted small'}, dr.connected ? '📥 Read pulls only (safe any time) · 🔄 Full Sync also pushes to your repo' + (STARTER ? '.' : ' (automatic on Fridays at 12:30).')
+      : (dro.read_repos.length ? 'Read works now (shared repos only); Full Sync needs your own repo: 📦 Clone / Init below.' : 'Solo use works without a repo. For a team: 📦 Clone / Init below.')),
+    head,
     h('h3', {}, 'My sharing'), h('p', {id: 'sharestats', class: 'small'}),
     h('div', {class: 'row'}, h('label', {}, 'peer_id ', h('input', {class: 'in', size: 18, maxlength: 39, value: dro.peer_id, placeholder: dr.me || 'your-name',
         title: 'Your name in the shared repo (peers/<peer_id>.json). Empty = the clone\'s git user.name.', oninput: e => { dro.peer_id = e.target.value.trim(); changed(); }})),
@@ -2106,9 +2236,7 @@ function renderRepo() {
       h('div', {class: 'grid2'}, h('div', {}, h('div', {class: 'small muted'}, 'Categories (empty = all)'), chips(ax.categories, {placeholder: 'e.g. cs.AR', check: v => /^[a-z-]+(\.[A-Za-z-]+)?$/.test(v) ? null : 'An arXiv category looks like cs.AR or eess.SP'})),
         h('div', {}, h('div', {class: 'small muted'}, 'exclude_any'), chips(ax.exclude_any, {placeholder: 'e.g. quantum'})))) : null,
     reads,
-    h('h3', {}, 'Sync'), h('div', {class: 'runbar'}, runBtn('pull_data_repo'), runBtn('sync_data_repo')),
-    h('p', {class: 'muted small'}, dr.connected ? 'Read = pull only from your repo and every shared repo (safe any time). Full Sync also pushes to your repo' + (STARTER ? '.' : '; on the Minisforum radar it runs automatically on Fridays at 12:30.')
-      : (dro.read_repos.length ? 'Read works now (shared repos only); Full Sync needs your own repo above.' : 'Both need a data repo above.')));
+    h('h3', {}, 'Peers'), peers);
   renderRepoStats(); lockRun();
 }
 
@@ -2173,7 +2301,7 @@ function renderPreset() {
       h('span', {class: 'di'}, pr.icon), h('b', {}, pr.label), h('span', {class: 'muted small'}, pr.sources),
       h('span', {class: 'small'}, `${pr.badge.si_icon} ${pr.badge.si} · ${pr.badge.sim_icon} ${pr.badge.sim}`),
       S.domain_preset === pr.key ? h('span', {class: 'tag'}, 'active') : h('button', {class: 'btn small', onclick: () => applyPreset(pr.key)}, 'Apply')))),
-    h('p', {class: 'muted small'}, 'A venue with "source": "pubmed" (NCBI E-utilities; "query" = a PubMed term, empty = your strongest keywords) or "biorxiv" / "medrxiv" (api.biorxiv.org; optional "categories") is fetched by those adapters; other venues by Crossref (ISSN) and the IEEE API.'));
+    howBox('A venue with "source": "pubmed" (NCBI E-utilities; "query" = a PubMed term, empty = your strongest keywords) or "biorxiv" / "medrxiv" (api.biorxiv.org; optional "categories") is fetched by those adapters; other venues by Crossref (ISSN) and the IEEE API.'));
 }
 
 // ---------- v3.0: full-text search (FTS5, bm25) ----------
@@ -2216,7 +2344,7 @@ function citeModal() {
      h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Close')]);
 }
 
-function renderAll() { renderDeploy(); renderStatus(); renderRun(); renderTopic(); renderPreset(); renderPlan(); renderThemes(); renderPeople(); renderRepo(); renderSearch(); lockRun(); }
+function renderAll() { renderStatus(); renderProfile(); renderPreset(); renderRepo(); renderPlan(); renderThemes(); renderPeople(); renderTopic(); renderSearch(); renderAdvanced(); renderDeploy(); renderSteps(); lockRun(); }
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 // ---------- saving ----------
@@ -2267,13 +2395,14 @@ async function connect() {
   for (const b of [...new Set(bases)]) {
     const j = await tryBase(b);
     if (j) {
-      API = b; ST = j.status; S = j.editable; buildKW(); renderAll(); baseline = snapshot(); changed();
+      API = b; ST = j.status; S = j.editable; buildKW(); renderAll(); AUTO = false; baseline = snapshot(); changed();
       const m = $('#mode'); m.textContent = '🟢 Live'; m.title = 'Connected to ' + b + ': buttons run on the radar computer';
       if (j.job && j.job.running) { JOB = {id: j.job.id, next: 0, running: true}; showConsole(`⏳ ${j.job.label}…`, []); poll(); }
       else if (j.active) streamActive(j.active);
       return;
     }
   }
+  AUTO = false;
   const m = $('#mode'); m.textContent = '⚪ Static'; m.title = 'Opened as a file: edits are saved as a downloaded config.json; the run buttons show the commands';
   if (location.protocol === 'file:' && STARTER) {
     try {
@@ -2283,10 +2412,10 @@ async function connect() {
   }
 }
 buildKW(); renderAll(); baseline = snapshot(); changed(); connect();
-if (/^#c-[a-z]+$/.test(location.hash)) setTimeout(() => { const e = $(location.hash); if (e) e.scrollIntoView({block: 'start'}); }, 50);
+if (/^#(c-[a-z]+|s[1-4])$/.test(location.hash)) setTimeout(() => openTo(location.hash), 50);
 // v3.0.7: the dashboard's ＋ Add Pillar / ＋ New Topic Dive pills land in the guided flows
-if (location.hash === '#add-theme') setTimeout(() => { const e = $('#c-plan'); if (e) e.scrollIntoView({block: 'start'}); addPillarWizard(); }, 300);
-if (location.hash === '#topic-dive') setTimeout(() => { const e = $('#c-topic'); if (e) e.scrollIntoView({block: 'start'}); const i = $('#topicq'); if (i) i.focus(); }, 300);
+if (location.hash === '#add-theme') setTimeout(() => { openTo('#c-plan'); addPillarWizard(); }, 300);
+if (location.hash === '#topic-dive') setTimeout(() => openTo('#c-topic', '#topicq'), 300);
 """
 
 

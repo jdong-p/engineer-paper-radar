@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.0.9)
+# 📡 Engineer Paper Radar (v3.1.0)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,42 +13,44 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.0.9
-*v3.0.9 亮点*
+## ✨ What's new in v3.1.0
+*v3.1.0 亮点*
 
-1. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+1. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+   (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
+   Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
+   **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
+   long explanations sit behind **💡 How this works**. The Quick Start below now starts from `git clone`.\
+   更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
+   自己的按钮。字号更大，长说明收进 **💡 How this works**。快速开始改为从 `git clone` 开始。
+2. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
-   folder (`git pull`, or download the ZIP again) and it runs.
+   folder (`git pull`) and it runs.
    On a Python older than 3.8 (or Python 2), the launchers and `python briefing.py` now say which version they
    found and give the one-line fix, `winget install Python.Python.3.12` (Windows) or `brew install python`
    (macOS).\
    现在支持 Python 3.8 及以上的所有版本（已测试）。**更正：** v3.0 至 v3.0.8 写的是 “Python 3.11+”，实际上
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
-   只要更新本项目（`git pull` 或重新下载 ZIP）即可。若 Python 低于 3.8（或为 Python 2），启动器和
+   只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-2. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+3. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-3. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+4. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-4. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+5. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-5. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+6. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
-6. **📚 Switch Radar / Repo ▾ and cross-discipline peers (v3.0.3–v3.0.4):** subscribed repos stay isolated
-   by default and pass a domain check, and colleagues from other fields show up with their own preset
-   ([details](#subscribed-repos-isolated-by-default-with-a-domain-check)).\
-   订阅的仓库默认隔离并经过领域检查；不同领域的同事以各自的预设显示。
-
 ### The v3.0 foundation (v3.0.2)
 *v3.0 基础功能（v3.0.2）*
 
@@ -88,60 +90,113 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 
 ---
 
-## 🚀 Quick Start: 100% visual setup in `STARTUP.html` (recommended)
-*快速开始：在 `STARTUP.html` 中完成全部可视化配置（推荐）*
+## 🚀 Quick Start: `git clone`, then set up visually in `STARTUP.html`
+*快速开始：`git clone`，然后在 `STARTUP.html` 中可视化配置*
 
-You **don't** need to write `config.json`, use an AI agent, or type a single command. The browser page
-`STARTUP.html` (the **Setup & Control Center**) sets up, runs and syncs the radar with buttons.
+Get the radar with **`git clone`**, not GitHub's *Download ZIP*: a clone updates with one `git pull`, and the
+same Git lets your team share one private paper corpus. Everything after that is buttons in the browser: no
+`config.json` by hand, no AI agent.
 
-你**不需要**手写 `config.json`、不需要 AI 助手，也不需要输入任何命令。浏览器页面 `STARTUP.html`（**设置与控制中心**）
-通过按钮完成配置、运行和同步。
+请用 **`git clone`** 获取本项目，而不是 GitHub 的 *Download ZIP*：克隆的副本只需 `git pull` 即可更新，同样的 Git
+也让团队共享同一个私有论文库。之后的一切都在浏览器中点按钮完成，无需手写 `config.json`，也不需要 AI 助手。
 
-**Before you start:** install **Python 3.8+** from <https://www.python.org/downloads/> (Windows: tick
-"Add python.exe to PATH"; or `winget install Python.Python.3.12` / macOS `brew install python`), then get this folder: **Code → Download ZIP** on GitHub (unzip it), or
-`git clone https://github.com/jdong-p/engineer-paper-radar.git`.
+### Step 1: Install Git and Python, clone, launch
+*第一步：安装 Git 和 Python，克隆，启动*
 
-**准备工作：** 从 python.org 安装 **Python 3.8+**（Windows 上勾选 "Add python.exe to PATH"），然后在 GitHub 上点
-**Code → Download ZIP** 下载并解压本项目（或使用 `git clone`）。
+**Windows (PowerShell):**
 
-### Step 1: Launch the Visual Control Center
-*第一步：启动可视化控制中心*
+```powershell
+# 1. Check what you have; install what's missing, then open a NEW PowerShell window
+git --version
+py -3 --version
+winget install --id Git.Git -e
+winget install --id Python.Python.3.12 -e
 
-Double-click **`Start_Radar_GUI.cmd`** (Windows) or **`Start_Radar_GUI.command`** (macOS; the first time,
-right-click → Open). It starts a small server on `http://127.0.0.1:18766` (this computer only) and opens
-**`STARTUP.html`** in your browser. Keep its window open while you use the page. On Linux, run
-`python3 briefing.py --gui` once instead. If your Python is older than 3.8 (or missing), the launcher says which
-version it found and shows the one-line install command.
+# 2. Clone the radar (and, if a team invited you, its private data repo right next to it)
+cd $HOME\Documents
+git clone https://github.com/jdong-p/engineer-paper-radar.git
+git clone https://github.com/<owner>/<private-data-repo>.git ic-paper-radar-data
 
-双击 **`Start_Radar_GUI.cmd`**（Windows）或 **`Start_Radar_GUI.command`**（macOS，首次需右键 → 打开）。它会在本机
-`127.0.0.1` 上启动一个小服务器，并在浏览器中自动打开 **`STARTUP.html`**。使用期间请保持该窗口打开。
-Linux 上请运行一次 `python3 briefing.py --gui`。若 Python 低于 3.8（或未安装），启动器会显示找到的版本和一行安装命令。
+# 3. Launch the Control Center (STARTUP.html opens in your browser)
+cd engineer-paper-radar
+py -3 briefing.py --gui
+```
 
-### Step 2: Configure everything visually in `STARTUP.html`
-*第二步：在 `STARTUP.html` 中可视化配置*
+**macOS / Linux (Terminal):**
 
-The **🧭 Setup Progress & Readiness** card at the top shows what is still missing.
+```bash
+# 1. Check what you have; install what's missing
+git --version
+python3 --version
+brew install git python          # macOS (Homebrew); Linux: sudo apt install git python3
 
-页面顶部的 **🧭 Setup Progress & Readiness** 卡片会显示还缺少哪些设置。
+# 2. Clone the radar (and, if a team invited you, its private data repo right next to it)
+cd ~/Documents
+git clone https://github.com/jdong-p/engineer-paper-radar.git
+git clone https://github.com/<owner>/<private-data-repo>.git ic-paper-radar-data
 
-1. **Pick your domain preset.** In **🧭 Domain preset**, click **Apply** on 🔬 IC & Solid-State Circuits,
-   🧬 Biology, Biomedical & Medicine (PubMed / bioRxiv), 🧪 Chemistry, Materials & ChemE, or 🛠️ Robotics,
+# 3. Launch the Control Center (STARTUP.html opens in your browser)
+cd engineer-paper-radar
+python3 briefing.py --gui
+```
+
+- **The private data repo is optional.** Skip that line if nobody invited you. Replace
+  `<owner>/<private-data-repo>` with the repo you were invited to (you need **write** access; with read
+  access, add it later in Step 2 → 📚 Shared repos to read). Keep the folder name `ic-paper-radar-data`:
+  the radar finds a clone in that sibling folder by itself. Git asks you to sign in to GitHub once (Windows
+  opens a browser; on macOS / Linux run `gh auth login` first).\
+  **私有数据仓库是可选的**：没人邀请你就跳过这一行。把 `<owner>/<private-data-repo>` 换成你被邀请的仓库（需要**写**
+  权限；只有读权限时，之后在第 2 步 → 📚 Shared repos to read 中添加）。保持文件夹名 `ic-paper-radar-data`，雷达会
+  自动找到这个同级文件夹中的克隆。Git 会要求登录 GitHub 一次（Windows 会打开浏览器；macOS / Linux 请先运行
+  `gh auth login`）。
+- **Next time**, start it the same way, or double-click **`Start_Radar_GUI.cmd`** (Windows) /
+  **`Start_Radar_GUI.command`** (macOS; the first time, right-click → Open). Keep its window open while you
+  use the page: it is a small server on `http://127.0.0.1:18766` (this computer only).\
+  **以后**用同样的命令启动，或双击 **`Start_Radar_GUI.cmd`**（Windows）/ **`Start_Radar_GUI.command`**（macOS，
+  首次需右键 → 打开）。使用期间请保持该窗口打开：它是只在本机 `127.0.0.1` 上运行的小服务器。
+- **Update** any time with `git pull` in the `engineer-paper-radar` folder (your settings, store and
+  `output/` are not in Git, so a pull never touches them).\
+  **更新**：在 `engineer-paper-radar` 文件夹中运行 `git pull`（你的设置、数据库和 `output/` 不在 Git 中，不会被改动）。
+- Python **3.8 or newer** works. If yours is older (or missing), the launcher and `briefing.py` say which
+  version they found and show the one-line install command.\
+  支持 Python **3.8 及以上**；版本过旧或未安装时，启动器和 `briefing.py` 会显示找到的版本和一行安装命令。
+
+### Step 2: Work through the 4 steps in `STARTUP.html`
+*第二步：在 `STARTUP.html` 中完成 4 个步骤*
+
+At the top, the **cockpit** shows **🎯 Required Setup** (`X/3 Ready`: 📚 Paper Store, 🧭 Pillars,
+✉️ Contact Email), **🤝 Shared Data Repo & Peers**, and **⚙️ Optional Boosters** (IEEE API, Claude AI, Taste
+Model: missing ones are fine, the radar runs in 0-token mode). Click a status pill to jump to the step that
+sets it. Below, four numbered steps open by themselves while they still need you, and fold into one line with
+**✅ Complete** when they are done (**⊞ Expand All** opens them all).
+
+页面顶部的 **驾驶舱** 显示 **🎯 必需设置**（`X/3 Ready`：论文库、方向、联系邮箱）、**🤝 共享数据仓库与同伴** 和
+**⚙️ 可选增强**（IEEE API、Claude AI、口味模型：缺少也没关系，雷达以 0 token 模式运行）。点击状态标签可跳到对应步骤。
+下方的四个编号步骤在需要你处理时自动展开，完成后折叠为一行并显示 **✅ Complete**。
+
+1. **Step 1 · Basic Profile & Discipline Preset (required):** type your **✉️ Contact E-mail** (Crossref and
+   OpenAlex answer faster with it) and **💾 Save Step 1**; then click **Apply** on your discipline: 🔬 IC &
+   Solid-State Circuits, 🧬 Biology, Biomedical & Medicine, 🧪 Chemistry, Materials & ChemE, or 🛠️ Robotics,
    Control & General Engineering.\
-   **选择领域预设**：在 **🧭 Domain preset** 中，点击对应卡片上的 **Apply**。
-2. **Let 🪄 Quick Keyword Setup build your keywords (no AI, 0 tokens).** In the **🪄** card:
-   - name 1–9 pillars (a pillar is one research direction, e.g. "Pipelined & Ring-Amp ADCs"), add **2–5 anchor
-     DOIs** (papers you love) and type a few **rough seed words** per pillar (e.g. `ring amplifier, pipelined
-     ADC, low power`);
-   - click **🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)**;
-   - review the preview (weighted keywords from +5 down to +1, unit regexes, a `negative_override`, VIP
-     authors, each with its evidence, and how many papers would pass), then click **✅ Apply Selected to My
-     Config**.\
-   **让 🪄 快速关键词设置自动生成关键词（无需 AI，0 token）**：命名方向、添加 2–5 篇你喜欢的锚点论文 DOI、为每个方向写几个
-   粗略的种子词，点击 **🪄 Auto-Plan**，在预览中勾选后点 **✅ Apply Selected to My Config**。
-3. **Fine-tune.** Every keyword stays editable in **🎯 My Research Themes & Keywords** (click a weight to change
-   it), and VIP authors and anchors in **👤 Key Authors & 🏛️ Classic Anchors**.\
-   **微调**：所有关键词都可以在 **🎯 My Research Themes & Keywords** 中修改，重点作者与锚点论文在
-   **👤 Key Authors & 🏛️ Classic Anchors** 中修改。
+   **第 1 步 · 基本信息与学科预设（必需）**：填写 **✉️ 联系邮箱** 并点 **💾 Save Step 1**，然后在你的学科卡片上点 **Apply**。
+2. **Step 2 · Private Shared Repo & Team Sync (recommended for teams):** cloned a data repo in Step 1? Click
+   **📥 Read / Pull Shared Repos** to load every paper. Otherwise **📦 Clone / Init** creates your own private
+   repo (**✨ Create / Init My Private Repo**) or clones one shared with you. **🔄 Full Sync with Primary Repo**
+   pulls and pushes. Solo use works without any repo.\
+   **第 2 步 · 私有共享仓库与团队同步（推荐团队使用）**：已在第一步克隆了数据仓库？点 **📥 Read / Pull Shared Repos**
+   载入全部论文。否则用 **📦 Clone / Init** 创建自己的私有仓库或克隆别人共享的仓库。单人使用无需任何仓库。
+3. **Step 3 · Research Pillars & 0-Token Keyword Planner (required):** name 1–9 pillars (a pillar is one
+   research direction, e.g. "Pipelined & Ring-Amp ADCs"), add **2–5 anchor DOIs** (papers you love) and a few
+   **rough seed words** per pillar, click **🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)**,
+   review the preview and **✅ Apply Selected to My Config**. **＋ Add New Pillar (Guided)** adds one more
+   later. Every keyword stays editable under **🎛️ Fine-tune keywords & weights per pillar** (click a weight to
+   change it).\
+   **第 3 步 · 研究方向与 0 token 关键词规划（必需）**：命名方向、添加 2–5 篇锚点论文 DOI 和几个粗略的种子词，点击
+   **🪄 Auto-Plan**，在预览中勾选后点 **✅ Apply Selected to My Config**。所有关键词都可在 **🎛️ Fine-tune** 中修改。
+4. **Step 4 · Topic Deep-Dive & Advanced Settings (optional):** 🔎 Topic Deep-Dive & ⚡ Instant Recall, a
+   full-text search of your store, your venues and report day, optional API keys, and the deployment mode
+   (💻 Single PC or 🌐 Virtual Mesh LAN).\
+   **第 4 步 · 专题深挖与高级设置（可选）**：专题综述与本地检索、全文搜索、期刊/会议与报告日、可选 API 密钥和部署模式。
 
 **🎯 How keyword weights work (min_score = 5).** A paper becomes a candidate when the weights of the keywords
 in its title, abstract and index terms add up to `min_score`:
@@ -162,41 +217,34 @@ checks that the full set doesn't flood your radar: words found in more than 5 % 
 
 规划器只读取你自己的论文库（以及 OpenAlex 上你的库中没有的锚点论文）。它按一个词在种子论文中比在整个库中常见多少来定权重，
 对本来就常见的词设上限，并检查整套关键词不会让雷达被大量论文淹没：出现在 5 % 以上论文中的词最多 +1。
-4. ***(Optional)* Connect a private data repo.** In **🤝 Private Shared Repo & Peer Sync**, either click
-   **✨ Create / Init My Private Repo** to start your own, or, if a collaborator gave you access to theirs
-   (for example a lab corpus of 10,000+ papers), paste its URL and click **📥 Clone & Connect Private Data
-   Repo**, then **📥 Read / Pull Shared Repos** to load every paper with one click.\
-   **（可选）连接私有数据仓库**：在 **🤝 Private Shared Repo & Peer Sync** 中点击 **✨ Create / Init My Private
-   Repo** 创建你自己的仓库；或者在协作者给你权限后，粘贴其仓库地址并点击 **📥 Clone & Connect Private Data Repo**，
-   再点 **📥 Read / Pull Shared Repos**，一键载入共享论文库。
 
-Every change is kept on the page until you click **💾 Save Config** (only the settings you changed are
-written; the previous file is backed up in `output/_system/config.backup.json`). The Run button below saves
-for you too.
+Every change stays on the page until you click **💾 Save Config** (only the settings you changed are written;
+the previous file is backed up in `output/_system/config.backup.json`). The run buttons save for you too.
 
 页面上的修改在点击 **💾 Save Config** 后写入 `config.json`（只写入改动的设置，旧文件备份在
-`output/_system/config.backup.json`）。下面的运行按钮也会自动保存。
+`output/_system/config.backup.json`）。运行按钮也会自动保存。
 
-### Step 3: Click `▶ Run & Update My Dashboard`
-*第三步：点击 `▶ Run & Update My Dashboard`*
+### Step 3: Click `▶ Run & Update Dashboard`
+*第三步：点击 `▶ Run & Update Dashboard`*
 
-Click **▶ Run & Update My Dashboard** in the bar at the bottom of `STARTUP.html`. It saves your settings,
-scores every paper in your store against your pillars, fills each pillar with its best papers, and rebuilds
-**`DASHBOARD.html`**. The output streams into the page; then click **📊 Open Dashboard ↗** in the header.
+Click the green **▶ Run & Update Dashboard** in the cockpit (also at the end of Step 3 and in the bar at the
+bottom). It saves your settings, scores every paper in your store against your pillars, fills each pillar with
+its best papers, and rebuilds **`DASHBOARD.html`**. The output streams into the page; then click
+**📊 Open Dashboard ↗**.
 
-点击 `STARTUP.html` 底部栏中的 **▶ Run & Update My Dashboard**：它会保存设置、按你的方向给全部论文打分、为每个方向
-挑选最佳论文，并重建 **`DASHBOARD.html`**。运行输出会实时显示在页面上；完成后点击页面顶部的 **📊 Open Dashboard ↗**。
+点击驾驶舱中绿色的 **▶ Run & Update Dashboard**（第 3 步末尾和页面底部栏中也有）：它会保存设置、按你的方向给全部论文打分、
+为每个方向挑选最佳论文，并重建 **`DASHBOARD.html`**。运行输出会实时显示在页面上；完成后点击 **📊 Open Dashboard ↗**。
 
-The **🚀 Run** card has the other buttons, for any time:
+The cockpit's other buttons work any time:
 
-**🚀 Run** 卡片中还有以下按钮，随时可用：
+驾驶舱中的其他按钮随时可用：
 
-- **🌐 Fetch New Papers Now:** collects the latest papers from every venue and updates this week's report.\
-  抓取所有期刊/会议的最新论文，并更新本周报告。
+- **🔄 Full Sync (Pull + Push):** applies your dashboard marks, then syncs and pushes your corpus.\
+  应用面板上的标记，然后同步并推送你的论文库。
 - **📥 Read / Pull Shared Repos:** reads your data repo and every repo you subscribe to (never pushes).\
   拉取你的数据仓库和你订阅的所有仓库（从不推送）。
-- **🔄 Full Sync with My Private Repo:** applies your dashboard marks, then syncs and pushes your corpus.\
-  应用面板上的标记，然后同步并推送你的论文库。
+- **🌐 Fetch New Papers Now:** collects the latest papers from every venue and updates this week's report.\
+  抓取所有期刊/会议的最新论文，并更新本周报告。
 
 Only one run happens at a time: a button pressed while another run is going (a scheduled task, a second
 window, a double click) starts nothing and shows that run's output instead.
@@ -504,10 +552,10 @@ repo, each with its field's icon. Every peer page has a **← Back to My Radar**
 
 If you and a colleague keep one paper corpus in a shared (private) Git repo whose single file is
 `paper_store_clean_share.sqlite`, connect it in `STARTUP.html` (**📥 Clone & Connect Private Data Repo**
-clones it next to this folder), and **🔄 Full Sync with My Private Repo** keeps both of you in sync:
+clones it next to this folder), and **🔄 Full Sync (Pull + Push)** keeps both of you in sync:
 
 如果你和同事用一个共享（私有）Git 仓库维护同一个论文库，在 `STARTUP.html` 中连接它，然后用
-**🔄 Full Sync with My Private Repo** 保持双方同步：
+**🔄 Full Sync (Pull + Push)** 保持双方同步：
 
 1. `git fetch` + `git reset --hard origin/main` in the clone: the shared file is taken exactly as it is,
    so Git never has to merge a binary file.
@@ -572,7 +620,7 @@ with access to the shared repo can read what you publish.
 *免费 IEEE API key*
 
 Without a key the radar prints one `[INFO]` line and uses OpenAlex + Crossref. With a key, new papers get
-their abstracts and IEEE index terms sooner and older months are back-filled. The Setup Progress card shows
+their abstracts and IEEE index terms sooner and older months are back-filled. The cockpit's ⚙️ Optional Boosters shows
 whether a key is set (yes/no only: keys are never displayed).
 
 没有 key 时打印一行 `[INFO]` 并使用 OpenAlex + Crossref；有 key 时新论文摘要更全，并会回填历史论文。
@@ -793,8 +841,8 @@ fractional-N PLL papers (JSSC, TCAS-I/II, CICC, ISSCC) on the radar.
 
 使用预建数据库时，该示例会筛出 10 篇噪声整形/流水线 SAR ADC 论文和 10 篇小数分频 PLL 论文。
 
-### Score and seed the dashboard (= ▶ Run & Update My Dashboard)
-*打分并生成面板（等同于 ▶ Run & Update My Dashboard）*
+### Score and seed the dashboard (= ▶ Run & Update Dashboard)
+*打分并生成面板（等同于 ▶ Run & Update Dashboard）*
 
 ```bash
 python briefing.py --rescore
@@ -983,14 +1031,16 @@ python briefing.py --adopt-external                     # later: take the ones t
 git pull
 ```
 
-(Downloaded the ZIP instead? Download it again and copy your `config.json` and `paper_store.sqlite` over.)
+An old copy that isn't a Git folder (a ZIP download)? `git clone` the repo once (see the Quick Start), then
+move your `config.json`, `paper_store.sqlite` and `output/` into the new folder.
 
 Your `config.json`, store and `output/` are not in Git, so a pull never touches them. When a new version
 adds a setting to `config.example.json`, the scripts use its default until you set it in your own
 `config.json`. Nested sections merge key by key (your values win); lists, and your keyword, synonym and
 conference maps, are always taken whole from your file.
 
-（如果你下载的是 ZIP，重新下载后把 `config.json` 和 `paper_store.sqlite` 复制过去即可。）
+（旧副本不是 Git 文件夹（例如 ZIP 下载）？先按快速开始 `git clone` 一次，再把 `config.json`、`paper_store.sqlite` 和
+`output/` 移到新文件夹中。）
 `config.json`、数据库和 `output/` 都不在 Git 中，`git pull` 不会改动它们；新版本在 `config.example.json` 中新增的
 设置会以默认值自动生效，你的设置始终优先。
 
@@ -1066,7 +1116,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.0.9},
+  version   = {3.1.0},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}
@@ -1118,9 +1168,9 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
   不读取 PDF，摘要与评分只基于标题和摘要；引用数据前请阅读原文。
 - **Reports are in English** (academic convention).\
   报告统一使用英文。
-- **Reset:** delete `output/` and click **▶ Run & Update My Dashboard** (or run `python briefing.py --rescore`);
+- **Reset:** delete `output/` and click **▶ Run & Update Dashboard** (or run `python briefing.py --rescore`);
   the store keeps every paper.\
-  重置：删除 `output/` 后点击 **▶ Run & Update My Dashboard**（或运行 `--rescore`），数据库中的论文不会丢失。
+  重置：删除 `output/` 后点击 **▶ Run & Update Dashboard**（或运行 `--rescore`），数据库中的论文不会丢失。
 - **Dedicated machine (optional):** set `"portable_mode": false` and `"host_lock": "<hostname>"` in
   `config.json` to stop the scripts from running on other computers that sync the same folder.
 
@@ -1136,9 +1186,9 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
 | `HTTP Error 429` from OpenAlex | OpenAlex's daily free budget is used up; the run continues and retries next time. Setting `contact_email` helps |
 | `python` not found / opens the Microsoft Store (Windows) | `winget install Python.Python.3.12`, or Python 3.8+ from python.org with "Add python.exe to PATH" (the launcher also tries `py`) |
 | `needs Python 3.8 or newer. Found: Python 3.7…` | Install a current Python: `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), then open a new terminal |
-| `SyntaxError` in `briefing.py` on Python 3.8–3.11 | Your copy is older than v3.0.9 (v3.0–v3.0.8 needed Python 3.12). Update it (`git pull` or a new ZIP); your Python is fine |
+| `SyntaxError` in `briefing.py` on Python 3.8–3.11 | Your copy is older than v3.0.9 (v3.0–v3.0.8 needed Python 3.12). Update it with `git pull` (an old ZIP copy: `git clone` once, see [Updating](#updating)); your Python is fine |
 | `xcrun: error` (macOS) | Install Python from python.org, or run `xcode-select --install` once |
-| No pillar pills under 📅 Weekly Brief | Click **▶ Run & Update My Dashboard** after changing pillars |
+| No pillar pills under 📅 Weekly Brief | Click **▶ Run & Update Dashboard** after changing pillars |
 | A 🏷️ note or click didn't reach `MASTER_TABLE.md` | 💾 Save Marks on the dashboard, then any run (or `python briefing.py --sync`) |
 | `STARTUP.html` shows **⚪ Static** and the buttons only show commands | It was opened as a file: start `Start_Radar_GUI.cmd` / `.command` (or `python briefing.py --gui`) |
 | macOS: "Start_Radar_GUI.command can't be opened" | Right-click → Open once; if it isn't executable, run `chmod +x Start_Radar_GUI.command` |
