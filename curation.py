@@ -27,6 +27,9 @@ after it's applied it's renamed to curation_marks.applied.json so it's never app
 Archived papers keep their abstract and digest; they're only hidden from MASTER_TABLE.md's active view
 and from the .bib files, and stay searchable by --topic / --recall.
 """
+
+from __future__ import annotations
+
 import json
 import re
 import secrets

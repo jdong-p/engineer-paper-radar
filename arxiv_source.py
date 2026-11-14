@@ -11,6 +11,9 @@ arXiv's API terms: at most one request every 3 seconds, one connection at a time
 their arXiv DOI (10.48550/arxiv.<id>, version stripped); a preprint whose journal DOI is already in the store
 is skipped. They stay out of --export-share / --sync-data-repo unless "share" (or selected / cited).
 """
+
+from __future__ import annotations
+
 import re
 import time
 import urllib.parse

@@ -7,6 +7,9 @@ A pinned paper has status 'pinned' (collection, catch-up and Friday's finalize n
 optional `pillar` that overrides the keyword/digest guess. Missing papers are fetched from OpenAlex
 (free), with one counted IEEE DOI lookup only when OpenAlex has no abstract.
 """
+
+from __future__ import annotations
+
 import json
 import re
 import urllib.parse

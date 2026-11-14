@@ -11,6 +11,9 @@ apply_changes() (STARTUP.html → 🧭 Domain preset → Apply) also writes the 
 (verification.silicon_cues / simulation_cues) and, only if asked, replaces the venue list with the preset's
 starter venues (PubMed / bioRxiv / Crossref-by-ISSN journals) and catch_up.flagship_venues.
 """
+
+from __future__ import annotations
+
 import json
 from pathlib import Path
 

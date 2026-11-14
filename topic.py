@@ -14,6 +14,9 @@ Stage C (one claude -p): Executive summary & evolution, Classic-vs-SOTA master t
   v3.0.6, 0 tokens (--no-claude, no Claude CLI, or a failed call): the dive is still saved and written, with
   ranked 🏛️ Classics / 🚀 Recent tables (evidence badge, key numbers from the abstract) instead of the synthesis.
 """
+
+from __future__ import annotations
+
 import json
 import math
 import re
@@ -79,7 +82,7 @@ def parse_query(q, cfg):
         q = q.replace(m[0], " ")
     groups, seen = [], set()
     for tok in re.findall(r"[A-Za-z][A-Za-z0-9-]+", q):
-        base = tok.lower().removeprefix("low-").removeprefix("ultra-")
+        base = re.sub(r"^ultra-", "", re.sub(r"^low-", "", tok.lower()))
         if base in tc["generic_words"] or base in seen or len(base) < 3:
             continue
         seen.add(base)

@@ -19,6 +19,9 @@ set_topic_retired(store, slug, flag)  briefing.py --retire-topic / --unretire-to
   meta['topics'][slug]['retired'] = True (or removed): the dive moves into 🏺 Past / Antique Dives ▾ on the
   dashboard and its papers keep a 🏺 <short> badge; nothing else changes, so ↺ Restore brings it back as it was.
 """
+
+from __future__ import annotations
+
 import json
 import re
 from datetime import date

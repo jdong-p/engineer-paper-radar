@@ -25,6 +25,9 @@ Per pillar:
   5. negative_override from the +5 / +4 core phrases; VIP authors ranked over the anchors (×3) and top hits.
 The plan is a suggestion: STARTUP.html shows it in a preview to pick from; nothing is written by this module.
 """
+
+from __future__ import annotations
+
 import json
 import math
 import re

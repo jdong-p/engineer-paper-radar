@@ -33,6 +33,9 @@ each launch: the launch link (/?k=<key>) stores it in an HttpOnly, SameSite=Stri
 must also carry the header X-Radar-GUI. It sends no CORS headers (except on /ping, which returns no data), so
 another website can neither read its pages nor send it a request with that header.
 """
+
+from __future__ import annotations
+
 import http.cookies
 import json
 import os
@@ -579,7 +582,8 @@ def write_config(changes, cfg=None):
         new = new.replace("\r\n", "\n").replace("\n", "\r\n")
     try:
         import curation
-        (curation.system_dir(cfg or load_cfg()) / "config.backup.json").write_text(text, encoding="utf-8", newline="")
+        with open(curation.system_dir(cfg or load_cfg()) / "config.backup.json", "w", encoding="utf-8", newline="") as fh:
+            fh.write(text)
     except Exception:
         pass
     tmp = CONFIG.with_name("config.json.tmp")
@@ -904,9 +908,9 @@ class Jobs:
         with self.lock:
             st = self.st
             i = max(int(since) - st["base"], 0)
-            return {k: st[k] for k in ("id", "action", "running", "rc", "started", "finished")} | {
+            return {**{k: st[k] for k in ("id", "action", "running", "rc", "started", "finished")}, **{
                 "label": ACTIONS.get(st["action"] or "", ""), "lines": st["lines"][i:],
-                "next": st["base"] + len(st["lines"])}
+                "next": st["base"] + len(st["lines"])}}
 
     def log(self, line):
         with self.lock:
@@ -1072,7 +1076,7 @@ def api_get(path, query, jobs):
             since = int((query.get("since") or ["0"])[0])
         except ValueError:
             since = 0
-        return 200, {"ok": True} | jobs.view(since)
+        return 200, {"ok": True, **jobs.view(since)}
     if path == "/api/active":
         import run_lock
         try:
@@ -1195,7 +1199,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.8</span></h1>
+<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.9</span></h1>
 <a class="btn" href="DASHBOARD.html">📊 Open Dashboard ↗</a>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>

@@ -17,6 +17,9 @@ Settings (config.json → "scoring", all optional): title_multiplier (1.5, used 
 (3), coupling_min_shared (2), taste_min_examples (8), taste_max_negatives (24), taste_implicit_weight (0.5),
 taste (true).
 """
+
+from __future__ import annotations
+
 import math
 import re
 from collections import Counter

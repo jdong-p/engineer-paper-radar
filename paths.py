@@ -2,6 +2,9 @@
 lives under ./output next to these scripts, whatever config.json's "paths" say, so the folder works
 unchanged on Windows and macOS. "marks_extra_dirs" may use ~ (e.g. "~/Downloads").
 """
+
+from __future__ import annotations
+
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent

@@ -10,6 +10,9 @@ Order of each daily run (all public/free; IEEE capped at ieee_daily_budget calls
 
 IEEE pages themselves sit behind an AWS WAF bot challenge: never scrape them, use the API.
 """
+
+from __future__ import annotations
+
 import html
 import http.cookiejar
 import json

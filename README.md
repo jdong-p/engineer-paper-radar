@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.0.8)
+# 📡 Engineer Paper Radar (v3.0.9)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,27 +13,33 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.0.8
-*v3.0.8 亮点*
+## ✨ What's new in v3.0.9
+*v3.0.9 亮点*
 
-1. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+1. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8, 3.9 and newer, not only 3.11+. On an older
+   Python (or Python 2), the launchers and `python briefing.py` say which version they found and give the
+   one-line fix, `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), instead of a
+   syntax error.\
+   现在支持 Python 3.8 及以上版本。若 Python 版本过旧（或为 Python 2），启动器和 `python briefing.py` 会显示找到的版本，
+   并给出一行安装命令，而不是报语法错误。
+2. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-2. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+3. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-3. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+4. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-4. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+5. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
-5. **📚 Switch Radar / Repo ▾ and cross-discipline peers (v3.0.3–v3.0.4):** subscribed repos stay isolated
+6. **📚 Switch Radar / Repo ▾ and cross-discipline peers (v3.0.3–v3.0.4):** subscribed repos stay isolated
    by default and pass a domain check, and colleagues from other fields show up with their own preset
    ([details](#subscribed-repos-isolated-by-default-with-a-domain-check)).\
    订阅的仓库默认隔离并经过领域检查；不同领域的同事以各自的预设显示。
@@ -86,11 +92,11 @@ You **don't** need to write `config.json`, use an AI agent, or type a single com
 你**不需要**手写 `config.json`、不需要 AI 助手，也不需要输入任何命令。浏览器页面 `STARTUP.html`（**设置与控制中心**）
 通过按钮完成配置、运行和同步。
 
-**Before you start:** install **Python 3.11+** from <https://www.python.org/downloads/> (Windows: tick
-"Add python.exe to PATH"), then get this folder: **Code → Download ZIP** on GitHub (unzip it), or
+**Before you start:** install **Python 3.8+** from <https://www.python.org/downloads/> (Windows: tick
+"Add python.exe to PATH"; or `winget install Python.Python.3.12` / macOS `brew install python`), then get this folder: **Code → Download ZIP** on GitHub (unzip it), or
 `git clone https://github.com/jdong-p/engineer-paper-radar.git`.
 
-**准备工作：** 从 python.org 安装 **Python 3.11+**（Windows 上勾选 "Add python.exe to PATH"），然后在 GitHub 上点
+**准备工作：** 从 python.org 安装 **Python 3.8+**（Windows 上勾选 "Add python.exe to PATH"），然后在 GitHub 上点
 **Code → Download ZIP** 下载并解压本项目（或使用 `git clone`）。
 
 ### Step 1: Launch the Visual Control Center
@@ -99,11 +105,12 @@ You **don't** need to write `config.json`, use an AI agent, or type a single com
 Double-click **`Start_Radar_GUI.cmd`** (Windows) or **`Start_Radar_GUI.command`** (macOS; the first time,
 right-click → Open). It starts a small server on `http://127.0.0.1:18766` (this computer only) and opens
 **`STARTUP.html`** in your browser. Keep its window open while you use the page. On Linux, run
-`python3 briefing.py --gui` once instead.
+`python3 briefing.py --gui` once instead. If your Python is older than 3.8 (or missing), the launcher says which
+version it found and shows the one-line install command.
 
 双击 **`Start_Radar_GUI.cmd`**（Windows）或 **`Start_Radar_GUI.command`**（macOS，首次需右键 → 打开）。它会在本机
 `127.0.0.1` 上启动一个小服务器，并在浏览器中自动打开 **`STARTUP.html`**。使用期间请保持该窗口打开。
-Linux 上请运行一次 `python3 briefing.py --gui`。
+Linux 上请运行一次 `python3 briefing.py --gui`。若 Python 低于 3.8（或未安装），启动器会显示找到的版本和一行安装命令。
 
 ### Step 2: Configure everything visually in `STARTUP.html`
 *第二步：在 `STARTUP.html` 中可视化配置*
@@ -241,8 +248,8 @@ republish it.
 ## Features
 *功能*
 
-- **Zero dependencies:** Python **3.11+** standard library only. No `pip install`.\
-  **零依赖**：只需 Python 3.11+ 标准库，无需 `pip install`。
+- **Zero dependencies:** Python **3.8+** standard library only. No `pip install`.\
+  **零依赖**：只需 Python 3.8+ 标准库，无需 `pip install`。
 - **Runs anywhere:** Windows, macOS and Linux. Everything is written to `./output`.\
   **跨平台**：支持 Windows、macOS 和 Linux，所有输出写入 `./output`。
 - **Visual Control Center (`output/STARTUP.html`):** setup, runs and syncing with buttons (see Quick Start).\
@@ -950,7 +957,7 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `config.json` | Your settings: pillars, keywords, venues, anchors (not in Git, created from the template)<br>你的配置（不在仓库中） |
 | `config.example.json` | The starter template and the defaults for any key your `config.json` lacks<br>模板与默认值 |
 | `config_file.py` | Creates `config.json` from the template, merges it over the defaults |
-| `briefing.py` | The command behind every button<br>运行入口 |
+| `briefing.py`, `briefing_main.py` | The command behind every button: `briefing.py` checks for Python 3.8+ (readable by any Python, even 2), `briefing_main.py` is the radar<br>运行入口 |
 | `CITATION.cff` | Citation metadata (GitHub's "Cite this repository") |
 | `scorer.py`, `presets.py` | v3.0 score boosters (coupling, taste) and domain presets |
 | `keyword_planner.py` | 🪄 0-token keyword & weight planner (`--plan-keywords`, STARTUP.html Auto-Plan) |
@@ -1054,7 +1061,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.0.8},
+  version   = {3.0.9},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}
@@ -1122,7 +1129,8 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
 | `json.decoder.JSONDecodeError` | `config.json` isn't valid JSON (a missing comma or quote); 💾 Save Config in `STARTUP.html` always writes valid JSON |
 | `[INFO] No IEEE_API_KEY set` | Not an error: the free OpenAlex + Crossref mode is in use |
 | `HTTP Error 429` from OpenAlex | OpenAlex's daily free budget is used up; the run continues and retries next time. Setting `contact_email` helps |
-| `python` not found / opens the Microsoft Store (Windows) | Install Python 3.11+ from python.org with "Add python.exe to PATH" (the launcher also tries `py`) |
+| `python` not found / opens the Microsoft Store (Windows) | `winget install Python.Python.3.12`, or Python 3.8+ from python.org with "Add python.exe to PATH" (the launcher also tries `py`) |
+| `needs Python 3.8 or newer. Found: Python 3.7…` (or a `SyntaxError` from an old copy) | Install a current Python: `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), then open a new terminal |
 | `xcrun: error` (macOS) | Install Python from python.org, or run `xcode-select --install` once |
 | No pillar pills under 📅 Weekly Brief | Click **▶ Run & Update My Dashboard** after changing pillars |
 | A 🏷️ note or click didn't reach `MASTER_TABLE.md` | 💾 Save Marks on the dashboard, then any run (or `python briefing.py --sync`) |

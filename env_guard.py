@@ -5,6 +5,9 @@ write everything to ./output (see paths.py). If you dedicate one machine to the 
 "portable_mode": false and "host_lock": "<that machine's hostname>" in config.json: the scripts then
 refuse to run anywhere else (useful when the folder is synced to several computers).
 """
+
+from __future__ import annotations
+
 import socket
 import sys
 

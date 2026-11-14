@@ -10,6 +10,9 @@ curation_marks.json), the stale click is dropped. "💾 Save Marks" exports the 
 curation_marks.json; curation.py applies it on the next run / --sync. Mermaid maps use the jsDelivr CDN
 (pinned); offline they show as text.
 """
+
+from __future__ import annotations
+
 import html
 import json
 import re

@@ -7,6 +7,9 @@ cite.bib = every ⭐ (cited=1) paper (for Overleaf; its pre-v2.8 duplicate selec
 selected_pool.bib = ✅ Selected or ⭐; all_reported.bib = Candidate + Selected + ⭐ (archived only when ⭐).
 @article / @inproceedings, key = FirstAuthorYearVenue.
 """
+
+from __future__ import annotations
+
 import re
 import unicodedata
 from pathlib import Path
@@ -282,7 +285,7 @@ def bib_entry(p, key):
         fields = [("title", "{" + _tex(fetcher.tidy_tex(p["title"])) + "}"),
                   ("author", " and ".join(_tex(_bib_author(a)) for a in p.get("authors") or [] if a)),
                   ("howpublished", f"arXiv:{aid}"), ("year", str(_year(p))), ("eprint", aid), ("archivePrefix", "arXiv"),
-                  ("primaryClass", (p.get("venue_name") or "").removeprefix("arXiv").strip(" ()")),
+                  ("primaryClass", re.sub(r"^arXiv", "", p.get("venue_name") or "").strip(" ()")),
                   ("doi", p["doi"]), ("url", f"https://arxiv.org/abs/{aid}")]
         return f"@misc{{{key},\n" + ",\n".join(f"  {k} = {{{v}}}" for k, v in fields if v) + "\n}"
     conf = bool(CONF_RX.search(p.get("venue_name") or "")) or p["venue"] in ("ISSCC", "CICC", "VLSI", "ESSERC")

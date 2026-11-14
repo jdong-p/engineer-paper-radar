@@ -8,6 +8,9 @@ Merge rules: dicts merge key by key and your values win; lists, strings and numb
 your file. Maps whose keys are your own data (OWN_MAPS: keyword weights, synonyms, the conference mapping)
 are taken whole too, so a default entry you deleted never comes back.
 """
+
+from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path

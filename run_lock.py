@@ -12,6 +12,9 @@ lock, the run also copies its output to .run.log, so STARTUP.html can show a run
     is stale and taken over, so a crashed or killed run never blocks the radar.
 Both files are gitignored.
 """
+
+from __future__ import annotations
+
 import atexit
 import json
 import os

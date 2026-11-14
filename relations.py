@@ -5,6 +5,9 @@
 - corpus:     A cites a paper already in the local corpus (backfilled or earlier weeks)
 - key prior:  A's most-cited references (OpenAlex), cached per paper in `keyrefs`
 """
+
+from __future__ import annotations
+
 import json
 import re
 import urllib.parse

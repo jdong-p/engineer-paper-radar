@@ -16,6 +16,9 @@ briefing.py calls this only with --require-vpn / --fetch-pdf; the default daily 
 Run standalone:  python vpn_checker.py [--notify]   (exit 0 = connected, 1 = disconnected;
                  --notify also shows the `msg *` popup when disconnected)
 """
+
+from __future__ import annotations
+
 import ipaddress
 import json
 import os

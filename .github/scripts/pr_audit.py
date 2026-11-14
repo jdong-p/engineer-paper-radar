@@ -5,7 +5,9 @@ request into main (a required status check in the main ruleset).
 
 It never imports or runs code from the pull request: files are only compiled (py_compile), parsed (json)
 and read. Checks:
-  1. every tracked *.py file compiles;
+  1. every tracked *.py file compiles, and still runs on Python 3.8: the 3.8 grammar (no f-string forms from
+     3.12), `from __future__ import annotations` in every module, and briefing.py (the entry point that
+     prints the "needs Python 3.8+" message) without that import or f-strings, so any Python can read it;
   2. config.example.json (the starter template) is valid JSON and every personal setting still ships blank
      (pillars, keywords, peer_id, data_repo_dir, ...), so nobody's own config lands in the template;
   3. no config.json / config.local.json (each user's own, git-ignored), database, secret, log, output or
@@ -14,6 +16,11 @@ and read. Checks:
   5. nothing under .github/ changes (the maintainer merges those with the admin bypass).
 Prints ::error annotations and a summary; exits 1 when anything fails.
 """
+
+from __future__ import annotations
+
+import ast
+import io
 import json
 import os
 import py_compile
@@ -21,6 +28,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 from pathlib import Path
 
 SELF = ".github/scripts/pr_audit.py"
@@ -152,6 +160,53 @@ def check_config(repo):
                        "Your own settings belong in config.json, which Git ignores", name)
 
 
+MIN_PY = (3, 8)
+ENTRY = "briefing.py"  # read by every Python (even 2), so an old one gets the version message, not a SyntaxError
+FUTURE = "from __future__ import annotations"
+
+
+def fstring_312(src):
+    """Line of the first f-string that only Python 3.12+ can parse (PEP 701): the outer quote reused inside a
+    replacement field, or a backslash or a comment in one. Needs Python 3.12+ to see f-string tokens."""
+    stack = []  # [quote, brace depth]
+    try:
+        toks = list(tokenize.generate_tokens(io.StringIO(src).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return None
+    for t in toks:
+        kind = tokenize.tok_name[t.type]
+        if kind == "FSTRING_START":
+            stack.append([t.string.lstrip("rRfFbBuU")[0], 0])
+        elif kind == "FSTRING_END" and stack:
+            stack.pop()
+        elif stack and kind == "OP" and t.string in "{}":
+            stack[-1][1] += 1 if t.string == "{" else -1
+        elif stack and stack[-1][1] > 0 and (kind == "COMMENT" or (
+                kind == "STRING" and (t.string.lstrip("rRbBuU")[0] == stack[-1][0] or "\\" in t.string))):
+            return t.start[0]
+    return None
+
+
+def check_py38(repo):
+    for f in [f for f in git(repo, "ls-files", "-z", "--", "*.py").split("\0") if f]:
+        try:
+            src = (repo / f).read_text(encoding="utf-8")
+            tree = ast.parse(src, filename=f, feature_version=MIN_PY)
+        except (SyntaxError, UnicodeDecodeError, ValueError) as e:
+            fail("python 3.8", f"not valid Python 3.8 syntax: {getattr(e, 'msg', e)}", f, getattr(e, "lineno", None))
+            continue
+        line = fstring_312(src)
+        if line:
+            fail("python 3.8", "f-string form that needs Python 3.12 (a quote, backslash or comment inside {...})", f, line)
+        future = any(isinstance(n, ast.ImportFrom) and n.module == "__future__" and any(a.name == "annotations" for a in n.names)
+                     for n in tree.body)
+        if f == ENTRY:
+            if future or any(isinstance(n, (ast.JoinedStr, ast.NamedExpr)) for n in ast.walk(tree)):
+                fail("python 3.8", f"{ENTRY} must stay readable by any Python: no f-strings, no :=, no `{FUTURE}`", f)
+        elif not future:
+            fail("python 3.8", f"add `{FUTURE}` after the module docstring", f)
+
+
 def changed_files(repo, base):
     out = git(repo, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", f"{base}...HEAD")
     return [f for f in out.split("\0") if f]
@@ -215,13 +270,14 @@ def main():
         sys.exit(__doc__)
     repo, base = Path(sys.argv[1]).resolve(), sys.argv[2]
     n_py = check_compile(repo)
+    check_py38(repo)
     check_config(repo)
     files = changed_files(repo, base)
     check_files(repo, files)
     n_lines = check_lines(repo, base)
 
     summary = [f"## PR audit: {'❌ ' + str(len(errors)) + ' problem(s)' if errors else '✅ passed'}", "",
-               f"{n_py} Python files compiled, {TEMPLATE} checked, {len(files)} changed files, "
+               f"{n_py} Python files compiled (3.8+ checked), {TEMPLATE} checked, {len(files)} changed files, "
                f"{n_lines} added lines scanned.", ""]
     if errors:
         summary += ["| Check | File | Problem |", "|---|---|---|"]

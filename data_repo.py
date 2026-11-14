@@ -23,6 +23,9 @@ file, so nobody ever merges it in Git:
 A reset can't lose anything: the remote's papers come in at step 2, this radar's own are in its store and
 go out at step 3. After both collaborators have run it, both stores hold the same union of DOIs.
 """
+
+from __future__ import annotations
+
 import getpass
 import json
 import random
@@ -174,7 +177,7 @@ SLUG_RX = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
 
 def _norm_url(u):
     """https://github.com/a/b(.git)(/) and git@github.com:a/b(.git) → 'github.com/a/b' (lower case)."""
-    u = str(u or "").strip().lower().removesuffix("/").removesuffix(".git")
+    u = re.sub(r"\.git$", "", re.sub(r"/$", "", str(u or "").strip().lower()))
     u = re.sub(r"^git@([^:]+):", r"\1/", u)
     return re.sub(r"^https?://", "", u)
 

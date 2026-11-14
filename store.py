@@ -18,6 +18,9 @@ status: archive   backfilled corpus paper (for relations; recent ones can join a
 user_mark (stage): normal (📋 Candidate) | selected (✅) | archived (🗄️); cited 0/1 (⭐), independent of the
 stage since v2.9 — see curation.py; user_note = the 🏷️ Tech note typed in the dashboard (v2.15)
 """
+
+from __future__ import annotations
+
 import json
 import os
 import re
