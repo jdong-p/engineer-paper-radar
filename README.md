@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.0)
+# 📡 Engineer Paper Radar (v3.0.8)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,8 +13,33 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.0.2
-*v3.0.2 亮点*
+## ✨ What's new in v3.0.8
+*v3.0.8 亮点*
+
+1. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+   🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
+   **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
+   ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
+   停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
+2. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+   later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
+   your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
+   之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
+3. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+   dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
+   into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
+   preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
+   控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
+4. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+   with no AI call (`--plan-keywords`).\
+   不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
+5. **📚 Switch Radar / Repo ▾ and cross-discipline peers (v3.0.3–v3.0.4):** subscribed repos stay isolated
+   by default and pass a domain check, and colleagues from other fields show up with their own preset
+   ([details](#subscribed-repos-isolated-by-default-with-a-domain-check)).\
+   订阅的仓库默认隔离并经过领域检查；不同领域的同事以各自的预设显示。
+
+### The v3.0 foundation (v3.0.2)
+*v3.0 基础功能（v3.0.2）*
 
 1. **🖥️ Zero-AI, zero-code Visual Control Center (`STARTUP.html` + `Start_Radar_GUI.cmd` / `.command`):**
    double-click the launcher, configure your pillars, weighted keywords, VIP authors, anchors and the
@@ -236,8 +261,12 @@ republish it.
 - **Lineage tracking:** links a journal paper to the ISSCC / VLSI / CICC / ESSERC paper it extends (📈), so
   you can see what the journal version adds.\
   **会议→期刊演进**：把期刊论文与其扩展自的会议论文关联起来（📈）。
-- **Topic deep-dives:** the classics (by citations) and recent work on any topic (a CLI command, see below).\
-  **专题综述**：收集任意主题的经典论文与近期进展（命令行功能，见下文）。
+- **Topic deep-dives:** the classics (by citations) and recent work on any topic, from STARTUP.html or the
+  terminal, with or without AI (see below).\
+  **专题综述**：收集任意主题的经典论文与近期进展，可在 STARTUP.html 或命令行中运行，有无 AI 均可（见下文）。
+- **Grow and retire pillars:** add a pillar with a guided wizard, promote a topic dive to a pillar, and 🏺 retire
+  a pillar or a dive with all its history kept.\
+  **方向的增减**：向导新增方向、把专题升级为方向，以及 🏺 停用方向或专题并保留全部历史。
 - **Evidence badges:** measured-silicon (or wet-lab, synthesized, hardware-tested) papers get a badge and a
   small bonus; simulation-only papers are flagged.\
   **验证标记**：有实测（流片、湿实验、合成、硬件测试）的论文获得标记和少量加分；仅仿真的论文会被标出。
@@ -298,9 +327,11 @@ v3.0 新增：FTS5 全文检索、更少的 API 调用、更智能的打分（�
 1. **Views (top bar):** All · 📋 Candidate · ✅ Selected · ⭐ To Cite · **📅 Weekly Brief** ·
    **🔎 Topic Dives** · 📁 More Views (🔬 Silicon-Verified Only · 🏛️ Anchors & Pinned · 📈 Journal
    Extensions · 🗄️ Archived · ⚙️ Customize views).
-2. **Inside 📅 Weekly Brief:** All Weekly · one pill per pillar · 🌍 Beyond IEEE, plus **📄 Open Weekly
-   Report** (the latest week, with a week selector once there are several).
-   **Inside 🔎 Topic Dives:** All dives · one pill per topic dive · 📄 Open Topic Report · ＋ New Topic Dive ↗.
+2. **Inside 📅 Weekly Brief:** All Weekly · one pill per pillar · 🌍 Beyond IEEE · 🏺 Antiques ▾ (once a pillar
+   is retired) · ＋ Add Pillar ↗, plus **📄 Open Weekly Report** (the latest week, with a week selector once
+   there are several).
+   **Inside 🔎 Topic Dives:** All dives · one pill per active dive · 🏺 Past / Antique Dives ▾ (once a dive is
+   retired) · 📄 Open Topic Report · ＋ New Topic Dive ↗.
 3. **Curation stage, under either:** All (everything but 🗄️ Archived) · 📋 Candidate · ✅ Selected ·
    ⭐ Cite · 📁 More (🏛️ Anchors & Pinned · 🗄️ Archived). The counts follow the pill above, and the stage
    stays set while you switch pillars (e.g. 📋 Candidate across Pillar 1 → 2 → 3).
@@ -817,14 +848,15 @@ python briefing.py --recall "ring oscillator"   # local store only, 0 calls
 classics by relevance and citations plus 8 recent papers, written to `output/Topic_Dives/`. The synthesis uses
 your domain preset's wording and evidence badges. Without the Claude CLI (or with `--no-claude`) you still get
 the dive, at 0 tokens: ranked tables with key numbers from the abstracts and the citation map. It works even
-before you configure pillars. `--drop-topic <slug>` removes a dive from 🔎 Topic Dives.
+before you configure pillars. `--retire-topic <slug>` moves a dive to 🏺 Past / Antique Dives (everything kept,
+`--unretire-topic` brings it back); `--drop-topic <slug>` deletes it.
 
 `--topic` 结合本地库、OpenAlex、PubMed（BioMed 预设）和 IEEE API（如有 key），输出 6 篇经典与 8 篇近期论文；\
 综述按你的领域预设措辞。没有 Claude CLI 时同样生成专题（0 token：排序表格、摘要关键数字和引用图）。
 
 **In the Control Center:** the **🔎 Topic Deep-Dive & Local Recall** card runs both with one click (a
 0-Token Fast Mode toggle included) and shows, as you type, how your question is split into concept groups. It
-lists your dives with 📄 Report and ✕, and **📌 Promote Dive to Weekly Pillar** turns a dive into a permanent
+lists your dives with 📄 Report, 🏺 Retire / ↺ Restore and 🗑 Delete, and **📌 Promote Dive to Weekly Pillar** turns a dive into a permanent
 pillar. On the dashboard, 🔎 Topic Dives ends with **＋ New Topic Dive ↗**.
 
 **在控制中心：** “🔎 Topic Deep-Dive & Local Recall” 卡片一键运行专题或本地检索，输入时预览检索概念组，\
@@ -889,6 +921,9 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `python briefing.py --seed-pillars N` | Put the best papers of each pillar on the radar now: at least N this week, and up to 10 unreviewed |
 | `python briefing.py --topic "..."` | Topic deep-dive (local + OpenAlex [+ IEEE]) |
 | `python briefing.py --recall "..."` | Search the local store only |
+| `python briefing.py --retire-topic SLUG` / `--unretire-topic SLUG` | 🏺 Retire a topic dive (everything kept) / ↺ restore it |
+| `python briefing.py --drop-topic SLUG` | Delete a topic dive (its papers, marks and report files stay) |
+| `python briefing.py --retire-pillar N` | 🏺 Retire pillar N: papers keep a 🏺 badge, keywords backed up, later pillars move up one |
 | `python briefing.py --add "<DOI or title>" [--pillar N] [--cite]` | Pin a paper you care about |
 | `python briefing.py --cite / --select / --archive "<DOI or title words>"` | Mark papers from the terminal |
 | `python briefing.py --sync` | Apply 💾 Save Marks exports, refill each pillar to 10, rewrite the dashboard |
@@ -1019,7 +1054,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.0.2},
+  version   = {3.0.8},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}
