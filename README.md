@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.1.1)
+# 📡 Engineer Paper Radar (v3.1.2)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,16 +13,18 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.1.1
-*v3.1.1 亮点*
+## ✨ What's new in v3.1.2
+*v3.1.2 亮点*
 
 1. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
-   long explanations sit behind **💡 How this works**. v3.1.1 fixes phone widths: long paths now wrap. The Quick Start below now starts from `git clone`.\
+   long explanations sit behind **💡 How this works**. v3.1.1 fixes phone widths: long paths now wrap. In v3.1.2, long inputs (folder paths, repo URLs, pillar names,
+   anchor DOIs, seed words, Topic Dive and Search) wrap and grow as you type, with the label above the box; anchor
+   DOIs can be pasted several at once, one per line or comma-separated. The Quick Start below now starts from `git clone`.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
-   自己的按钮。字号更大，长说明收进 **💡 How this works**。快速开始改为从 `git clone` 开始。
+   自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。快速开始改为从 `git clone` 开始。
 2. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
@@ -1116,7 +1118,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.1.1},
+  version   = {3.1.2},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}

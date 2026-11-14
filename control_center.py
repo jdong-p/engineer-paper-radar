@@ -1201,7 +1201,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.1</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.2</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1336,6 +1336,17 @@ main.cc,.cc .card,.step-card,.sbody,.sbody>section,details.fine,.pods,.pod,.qa,.
 .ccp code,.ccp .mono,.ccp .tag,.ccp .kv>*,.ccp .ssum,.ccp .small,.ccp .spill,.ccp .dcard,.ccp table.mini td,.ccp table.mini th,.ccp .topicres{
 overflow-wrap:anywhere;word-break:break-word}.ccp code,.ccp .tag,.ccp .spill{white-space:normal}
 .ccp .in{max-width:100%}.ccp .row label{flex-wrap:wrap;max-width:100%}.ccp table.mini{table-layout:auto;max-width:100%}.ccp .nowrap{white-space:normal}
+/* v3.1.2: long text boxes wrap and grow (textarea.auto-grow); labels stack above them (.field) */
+.ccp textarea.in.auto-grow{display:block;width:100%;max-width:100%;min-height:0;overflow-y:hidden;overflow-x:hidden;white-space:pre-wrap;
+overflow-wrap:anywhere;word-break:break-word;resize:vertical;line-height:1.45}
+.ccp textarea.in.auto-grow:not(.mono){font-family:inherit;font-size:15px}
+.ccp .field{display:flex;flex-direction:column;align-items:stretch;gap:4px;width:100%;min-width:0;margin:8px 0}
+.ccp .field>.flabel{font-size:14.5px;font-weight:600}.ccp .field>.flabel .muted{font-weight:400}
+.ccp .field>input.in:not(.w){width:100%}.ccp .field>.row{margin:4px 0 0}
+.ccp .adder.long{display:flex;width:100%;align-items:flex-start}.ccp .adder.long>textarea{flex:1 1 260px}
+.ccp .planrow{align-items:flex-start}.ccp .planrow>textarea.pname{flex:1 1 240px}.ccp .planrow>textarea.seeds{flex:2 1 300px}
+.ccp .ph>textarea.name{flex:1 1 240px;width:auto}.ccp .ph>input.short{flex:0 1 150px}
+@media (max-width:560px){.ccp .planrow>textarea.pname,.ccp .planrow>textarea.seeds,.ccp .ph>textarea.name{flex-basis:100%}}
 @media (max-width:860px){.cc .cockpit{grid-template-columns:1fr}.ssum{padding-left:0}.stitle{font-size:17px}}
 @media (max-width:560px){.ccp .kv{grid-template-columns:minmax(0,1fr)}.ccp .kv>b{margin-top:4px}.ccp main.cc{padding-left:10px;padding-right:10px}
 .cc .card,.sbody{padding-left:12px;padding-right:12px}.step-card>summary{padding:12px}}
@@ -1367,6 +1378,26 @@ function fill(el, ...kids) {  // replaceChildren, but nested arrays flattened an
   el.replaceChildren(...kids.flat(9).filter(c => c != null && c !== false).map(c => c.nodeType ? c : document.createTextNode(String(c))));
   return el;
 }
+// v3.1.2: an auto-growing, wrapping text box. o.enter = Enter (no Shift) runs it; o.single = text that replaces newlines.
+function ta(attrs, o) {
+  o = o || {};
+  const e = h('textarea', Object.assign({rows: 1, spellcheck: 'false'}, attrs, {class: ((attrs && attrs.class) || 'in') + ' auto-grow'}));
+  if (o.single != null) e.addEventListener('input', () => { if (/[\r\n]/.test(e.value)) { const p = e.selectionStart; e.value = e.value.replace(/\r?\n/g, o.single); e.selectionStart = e.selectionEnd = Math.min(p, e.value.length); } }, true);
+  if (o.enter || o.single != null) e.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (o.enter) o.enter(); } });
+  return e;
+}
+function grow(el) {
+  if (!el.getClientRects().length) return;  // hidden (closed step): sized when it opens
+  el.style.height = 'auto'; el.style.height = (el.scrollHeight + 2) + 'px';
+}
+let GROW_Q = 0;
+function growAll() { GROW_Q = 0; document.querySelectorAll('textarea.auto-grow').forEach(grow); }
+function growSoon() { if (!GROW_Q) GROW_Q = setTimeout(growAll, 30); }  // a timer, not rAF: rAF pauses in background tabs
+document.addEventListener('input', e => { if (e.target.matches && e.target.matches('textarea.auto-grow')) grow(e.target); });
+document.addEventListener('toggle', growSoon, true);
+window.addEventListener('resize', growSoon);
+new MutationObserver(growSoon).observe(document.documentElement, {childList: true, subtree: true});
 function theme() {
   const r = document.documentElement;
   const dark = r.dataset.theme ? r.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
@@ -1438,10 +1469,11 @@ function chips(list, o) {
         o.move ? h('button', {title: 'Move to another pillar', onclick: () => o.move(i)}, '⇄') : null,
         h('button', {title: 'Remove', onclick: () => { list.splice(i, 1); draw(); changed(); if (o.after) o.after(); }}, '✕'));
     }), adder());
-    if (focus) { const f = box.querySelector('input.in'); if (f) f.focus(); }
+    if (focus) { const f = box.querySelector('.adder .in'); if (f) f.focus(); }
   };
   const adder = () => {
-    const inp = h('input', {class: 'in', placeholder: o.placeholder || 'add…', size: o.size || 22});
+    const inp = o.long ? ta({class: 'in mono', placeholder: o.placeholder || 'add…'}, {single: '', enter: () => go()})
+      : h('input', {class: 'in', placeholder: o.placeholder || 'add…', size: o.size || 22});
     const w = o.weights ? h('input', {class: 'in w', type: 'number', value: o.defw == null ? 3 : o.defw, min: -20, max: 20, step: 1, title: 'weight'}) : null;
     const go = () => {
       let v = inp.value.trim(); if (!v) return;
@@ -1457,8 +1489,8 @@ function chips(list, o) {
       } else list.push(v);
       draw(true); changed(); if (o.after) o.after();
     };
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-    return h('span', {class: 'adder'}, inp, w, h('button', {class: 'btn small', onclick: go}, '＋ Add'));
+    if (!o.long) inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+    return h('span', {class: 'adder' + (o.long ? ' long' : '')}, inp, w, h('button', {class: 'btn small', onclick: go}, '＋ Add'));
   };
   draw(false);
   return box;
@@ -1717,7 +1749,7 @@ function renderThemes() {
   const ps = KW.pillars.map((p, i) => {
     const head = i >= FIX
       ? [h('span', {class: 'num'}, `P${i + 1}`),
-         h('input', {class: 'in name', value: p.name, placeholder: 'Pillar name, e.g. Precision SAR ADCs', oninput: e => { p.name = e.target.value; changed(); }}),
+         ta({class: 'in name', value: p.name, placeholder: 'Pillar name, e.g. Precision SAR ADCs', oninput: e => { p.name = e.target.value; changed(); }}, {single: ' '}),
          h('input', {class: 'in short', value: p.short, maxlength: 24, placeholder: 'short label', title: '1–2 words for phones and the Pillar column (optional)', oninput: e => { p.short = e.target.value; changed(); }}),
          h('button', {class: 'btn small', title: 'Move up', disabled: i === FIX, onclick: () => { KW.pillars.splice(i - 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↑'),
          h('button', {class: 'btn small', title: 'Move down', disabled: i === KW.pillars.length - 1, onclick: () => { KW.pillars.splice(i + 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↓'),
@@ -1752,7 +1784,7 @@ function renderThemes() {
       h('div', {}, h('h3', {}, '🌍 Beyond-IEEE themes ', h('span', {class: 'tip muted small', title: 'beyond_ieee.key1_themes: application themes of your research (e.g. wearable, implantable, 6G). Empty = the Nature/Science board stays off.'}, 'ⓘ')),
         chips(S.key1_themes, {placeholder: 'e.g. wearable'}))),
     h('h3', {}, 'Negative override (regex on the title) ', h('span', {class: 'tip muted small', title: 'When the title matches, a negative keyword only costs negative_penalty instead of zeroing the paper. Python regex; (?i) = case-insensitive. Empty = off.'}, 'ⓘ')),
-    h('input', {class: 'in wide mono', value: S.negative_override, placeholder: '(?i)harvest|temperature sensor|…', oninput: e => { S.negative_override = e.target.value; changed(); }}),
+    ta({class: 'in wide mono', value: S.negative_override, placeholder: '(?i)harvest|temperature sensor|…', oninput: e => { S.negative_override = e.target.value; changed(); }}, {single: ''}),
     h('div', {class: 'row'}, h('label', {}, 'min_score ', h('input', {class: 'in w', type: 'number', min: 0, max: 1000, step: 1, value: S.min_score,
       oninput: e => { S.min_score = Number(e.target.value); changed(); }})), h('span', {class: 'muted small'}, 'papers below this score never become candidates (default 5).')));
   renderPillarCounts();
@@ -1838,10 +1870,10 @@ function addPillarWizard(pre) {
   pre = pre || {};
   if (KW.pillars.length >= D.max_pillars) return alert(`You already have ${D.max_pillars} pillars: remove one first.`);
   const n = KW.pillars.length + 1;
-  const nameIn = h('input', {class: 'in wide', value: pre.name || '', placeholder: 'Full pillar name, e.g. SAR ADCs for Body-Sensor Networks'});
+  const nameIn = ta({class: 'in wide', value: pre.name || '', placeholder: 'Full pillar name, e.g. SAR ADCs for Body-Sensor Networks'}, {single: ' '});
   const shortIn = h('input', {class: 'in short', maxlength: 24, value: pre.short || '', placeholder: 'short label (optional)', title: `Shown as P${n} · <label> on phones and in the Pillar column`});
-  const anchIn = h('textarea', {class: 'in wide mono', rows: 3, placeholder: '1–6 anchor DOIs (optional), one per line: papers that define this pillar'}, (pre.anchors || []).join('\n'));
-  const seedIn = h('input', {class: 'in wide', value: pre.seeds || '', placeholder: 'a few rough seed words, comma-separated: SAR ADC, body sensor network, energy-efficient'});
+  const anchIn = ta({class: 'in wide mono', rows: 2, value: (pre.anchors || []).join('\n'), placeholder: '1–6 anchor DOIs (optional): one per line, or comma-separated. Papers that define this pillar'});
+  const seedIn = ta({class: 'in wide', value: pre.seeds || '', placeholder: 'a few rough seed words, comma-separated or one per line: SAR ADC, body sensor network, energy-efficient'});
   const out = h('div', {class: 'planbody'});
   const owned = new Map(); KW.pillars.forEach((p, i) => p.kws.forEach(([k]) => owned.set(k.toLowerCase(), i + 1))); KW.loose.forEach(([k]) => owned.set(k.toLowerCase(), 0));
   let plan = null, picks = [], vipPicks = [], ov = null;
@@ -1863,7 +1895,7 @@ function addPillarWizard(pre) {
     });
     const no = r.negative_override || {};
     const ovBox = h('input', {type: 'checkbox'}); ovBox.checked = !!no.suggest && no.merged !== no.current;
-    const ovIn = h('input', {class: 'in wide mono', value: no.merged || ''}); ov = {ovBox, ovIn};
+    const ovIn = ta({class: 'in wide mono', value: no.merged || ''}, {single: ''}); ov = {ovBox, ovIn};
     const vips = (r.vip_authors || []).filter(v => !S.vip_authors.some(x => x.toLowerCase() === v.name.toLowerCase())).map(v => {
       const box = h('input', {type: 'checkbox'}); box.checked = true; vipPicks.push({v, box});
       return h('label', {class: 'chip', title: `${v.seed_papers} of their ${v.store} papers in your store are seed papers`}, box, ` ${v.name} `, h('span', {class: 'muted small'}, v.store ? `(${v.seed_papers}/${v.store})` : `(${v.score})`)); });
@@ -1914,8 +1946,10 @@ function addPillarWizard(pre) {
   modal(`＋ Add New Pillar P${n} (Guided)`, h('div', {},
     h('p', {class: 'small muted'}, `Adds one pillar after P1–P${n - 1}; their names, keywords and cached digests stay exactly as they are.`),
     h('h3', {}, 'Step 1 · Name, anchors and seed words'),
-    h('div', {class: 'row'}, h('span', {class: 'num'}, `P${n}`), nameIn), h('div', {class: 'row'}, shortIn),
-    anchIn, seedIn,
+    h('div', {class: 'field'}, h('span', {class: 'flabel'}, `P${n} · Full pillar name`), nameIn),
+    h('div', {class: 'field'}, h('span', {class: 'flabel'}, 'Short label ', h('span', {class: 'muted small'}, '(optional, for phones)')), shortIn),
+    h('div', {class: 'field'}, h('span', {class: 'flabel'}, '🏛️ Anchor DOIs ', h('span', {class: 'muted small'}, '(one per line or comma-separated)')), anchIn),
+    h('div', {class: 'field'}, h('span', {class: 'flabel'}, '🌱 Rough seed words ', h('span', {class: 'muted small'}, '(comma-separated or one per line)')), seedIn),
     h('h3', {}, 'Step 2 · Plan its keywords'),
     h('div', {class: 'row'}, h('button', {class: 'btn primary', id: 'wizplan', onclick: planIt}, '🪄 Auto-Plan Keywords for This New Pillar'),
       h('span', {class: 'muted small'}, 'reads your store (and OpenAlex for anchors it lacks); nothing changes yet')),
@@ -1928,9 +1962,8 @@ function addPillarWizard(pre) {
 function renderTopic() {
   const el = $('#c-topic'); if (!el) return;
   const T = ST.topics || {dives: [], recalls: []}, noClaude = !ST.env.has_claude;
-  const inp = h('input', {class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
-    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }});
-  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); topicRun('topic_dive'); } });
+  const inp = ta({class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
+    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }}, {single: ' ', enter: () => topicRun('topic_dive')});
   const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
   zbox.checked = TZERO || noClaude; zbox.disabled = noClaude;
   const btn = (a, primary) => h('button', {class: 'btn' + (primary ? ' primary' : ''), 'data-run': a, title: RUN_TIPS[a], onclick: () => topicRun(a)}, D.actions[a]);
@@ -1987,19 +2020,20 @@ function renderPlan() {
     h('td', {}, h('span', {class: 'wpill w' + w}, '+' + w)), h('td', {}, h('b', {}, t), h('div', {class: 'muted small'}, note)),
     h('td', {class: 'small muted'}, ex)))));
   const pillars = KW.pillars.map((p, i) => h('div', {class: 'row planrow'}, h('span', {class: 'num'}, `P${i + 1}`),
-    i >= (D.fixed_pillars || 0) ? h('input', {class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
-                          oninput: e => { const s0 = seedsOf(p, i); p.name = e.target.value; setSeeds(p, i, s0); changed(); }, onchange: () => renderThemes()})
+    i >= (D.fixed_pillars || 0) ? ta({class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
+                          oninput: e => { const s0 = seedsOf(p, i); p.name = e.target.value; setSeeds(p, i, s0); changed(); }, onchange: () => renderThemes()}, {single: ' '})
             : h('b', {class: 'pname'}, p.name.replace(/^Pillar\s*\d+\s*[—–-]\s*/, '')),
-    h('input', {class: 'in seeds', value: seedsOf(p, i), placeholder: 'rough seed words, comma-separated: ring amplifier, pipelined ADC, low power',
+    ta({class: 'in seeds', value: seedsOf(p, i), placeholder: 'rough seed words, comma-separated or one per line: ring amplifier, pipelined ADC, low power',
                 oninput: e => setSeeds(p, i, e.target.value)})));
-  const doiIn = h('input', {class: 'in', placeholder: '10.1109/JSSC.2020.1234567 or a doi.org link', size: 34});
+  const doiIn = ta({class: 'in mono', placeholder: '10.1109/JSSC.2020.1234567 or a doi.org link: one per line or comma-separated for several'}, {enter: () => addDoi()});
   const addDoi = () => {
-    const d = cleanDoi(doiIn.value); if (!d) return;
-    if (!/^10\.\d{4,9}\/\S+$/.test(d)) return alert('That is not a DOI (it starts with 10.).');
-    if (S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) return toast('Already an anchor');
-    S.anchors.push(d); changed(); renderPeople();
+    const ds = doiIn.value.split(/[\s,;]+/).map(cleanDoi).filter(Boolean); if (!ds.length) return;
+    const bad = ds.filter(d => !/^10\.\d{4,9}\/\S+$/.test(d));
+    if (bad.length) return alert('Not a DOI (a DOI starts with 10.): ' + bad.join(', '));
+    let n = 0; for (const d of ds) if (!S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) { S.anchors.push(d); n++; }
+    doiIn.value = ''; if (!n) return toast(ds.length > 1 ? 'Already anchors' : 'Already an anchor');
+    changed(); renderPeople();
   };
-  doiIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addDoi(); } });
   const anchors = S.anchors.length ? h('div', {class: 'chips'}, S.anchors.map((d, i) => h('span', {class: 'chip'}, h('span', {class: 't'}, d),
       h('button', {title: 'Remove anchor', onclick: () => { S.anchors.splice(i, 1); changed(); renderPeople(); }}, '✕'))))
     : h('p', {class: 'muted small'}, 'No anchors yet: 2–5 papers you love make the plan much better.');
@@ -2013,7 +2047,8 @@ function renderPlan() {
       h('button', {class: 'btn small primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
       h('span', {class: 'muted small'}, 'already set up? the guided flow plans keywords for one new pillar and leaves the others untouched')),
     PLAST ? pillarResult() : null,
-    h('div', {class: 'row'}, h('span', {class: 'small'}, '🏛️ Anchor DOIs (papers you love):'), doiIn, h('button', {class: 'btn small', onclick: addDoi}, '＋ Add')), anchors,
+    h('div', {class: 'field'}, h('span', {class: 'flabel'}, '🏛️ Anchor DOIs (papers you love) ', h('span', {class: 'muted small'}, 'Enter adds · Shift+Enter for a new line')), doiIn,
+      h('div', {class: 'row'}, h('button', {class: 'btn small', onclick: addDoi}, '＋ Add'))), anchors,
     h('h3', {}, '② Let the planner build the weighted keywords'),
     h('div', {class: 'row'}, h('button', {class: 'btn primary', id: 'planbtn', onclick: planKeywords}, '🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)'),
       h('span', {class: 'muted small'}, 'Reads your paper store (and OpenAlex for anchors it lacks). Nothing is changed until you apply.')),
@@ -2057,7 +2092,7 @@ function planModal(r) {
     }))) : h('p', {class: 'muted small'}, 'No suggestions: add seed words or anchors for this pillar.')));
   const no = r.negative_override || {};
   const ovBox = h('input', {type: 'checkbox'}); ovBox.checked = !!no.suggest && no.merged !== no.current;
-  const ovIn = h('input', {class: 'in wide mono', value: no.merged || ''});
+  const ovIn = ta({class: 'in wide mono', value: no.merged || ''}, {single: ''});
   const vips = (r.vip_authors || []).map(v => { const box = h('input', {type: 'checkbox'}); box.checked = true; vipPicks.push({v, box});
     return h('label', {class: 'chip', title: `${v.seed_papers} of their ${v.store} papers in your store are seed papers`}, box, ` ${v.name} `, h('span', {class: 'muted small'}, v.store ? `(${v.seed_papers}/${v.store})` : `(${v.score})`)); });
   const missing = (r.anchors || []).filter(a => a.source === 'missing');
@@ -2107,14 +2142,15 @@ function renderPeople() {
       h('td', {}, a ? `${a.title || ''} ` : h('span', {class: 'muted'}, 'not in the store yet: fetched and pinned on the next ▶ Run'), a ? h('span', {class: 'muted small'}, `${a.venue || ''} ${a.year || ''}`) : null),
       h('td', {}, h('button', {class: 'btn small danger', title: 'Remove anchor', onclick: () => { S.anchors.splice(i, 1); renderPeople(); changed(); }}, '✕')));
   });
-  const doiIn = h('input', {class: 'in', placeholder: '10.1109/JSSC.2020.1234567 or a doi.org link', size: 38});
+  const doiIn = ta({class: 'in mono', placeholder: '10.1109/JSSC.2020.1234567 or a doi.org link: one per line or comma-separated for several'}, {enter: () => addDoi()});
   const addDoi = () => {
-    const d = cleanDoi(doiIn.value); if (!d) return;
-    if (!/^10\.\d{4,9}\/\S+$/.test(d)) return alert('That is not a DOI (it starts with 10.).');
-    if (S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) return toast('Already an anchor');
-    S.anchors.push(d); renderPeople(); changed();
+    const ds = doiIn.value.split(/[\s,;]+/).map(cleanDoi).filter(Boolean); if (!ds.length) return;
+    const bad = ds.filter(d => !/^10\.\d{4,9}\/\S+$/.test(d));
+    if (bad.length) return alert('Not a DOI (a DOI starts with 10.): ' + bad.join(', '));
+    let n = 0; for (const d of ds) if (!S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) { S.anchors.push(d); n++; }
+    doiIn.value = ''; if (!n) return toast(ds.length > 1 ? 'Already anchors' : 'Already an anchor');
+    renderPeople(); changed();
   };
-  doiIn.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addDoi(); } });
   fill($('#c-people'), h('h2', {}, '👤 Key Authors & 🏛️ Classic Anchors'),
     h('div', {class: 'grid2'},
       h('div', {}, h('h3', {}, 'VIP authors ', h('span', {class: 'tip muted small', title: VIP_TIP}, 'ⓘ how names match')),
@@ -2137,7 +2173,7 @@ function renderRepoStats() {
     ? `You share: ✅ ${fmt(s.selected)} Selected · ⭐ ${fmt(s.cited)} Cited · 🏷️ ${S.data_repo.share_notes ? fmt(s.notes) + ' Tech notes' : 'notes kept private'} (in peers/${ST.data_repo.me || 'you'}.json)`
     : 'You share no curation: only the clean corpus (papers, abstracts, digests) goes to the repo.';
 }
-function linesList(arr) { return h('textarea', {class: 'in', oninput: e => { arr.splice(0, arr.length, ...e.target.value.split('\n').map(x => x.trim()).filter(Boolean)); changed(); }}, arr.join('\n')); }
+function linesList(arr) { return h('textarea', {class: 'in auto-grow', rows: 2, oninput: e => { arr.splice(0, arr.length, ...e.target.value.split('\n').map(x => x.trim()).filter(Boolean)); changed(); }}, arr.join('\n')); }
 // v3.0.4: read_repos chips are plain specs; S.data_repo.read_opts[spec] = {merge_corpus, force_merge}
 function dataRepoOut() {
   const d = Object.assign({}, S.data_repo), o = d.read_opts || {};
@@ -2187,18 +2223,19 @@ function renderRepo() {
         h('p', {class: 'small'}, 'With the GitHub CLI (gh) signed in, the repo is created for you.'),
         howBox('Your corpus, your GitHub account: with the GitHub CLI (gh) signed in, the repo is created for you; otherwise create an empty private repo on github.com first. The protocol files, your clean corpus and your overlay are pushed to main.'),
         (() => {
-          const spec = h('input', {class: 'in mono', size: 34, placeholder: 'your-name/my-paper-radar-data', 'aria-label': 'owner/name or URL'});
-          return h('div', {class: 'row'}, spec, h('button', {class: 'btn primary', 'data-run': 'init_data_repo', title: RUN_TIPS.init_data_repo,
-            onclick: () => { const v = spec.value.trim(); if (!v) return alert('Type owner/name (or a clone URL) first.'); run('init_data_repo', {spec: v}); }}, D.actions.init_data_repo));
+          const go = () => { const v = spec.value.trim(); if (!v) return alert('Type owner/name (or a clone URL) first.'); run('init_data_repo', {spec: v}); };
+          const spec = ta({class: 'in mono', placeholder: 'your-name/my-paper-radar-data', 'aria-label': 'owner/name or URL'}, {single: '', enter: go});
+          return h('div', {class: 'field'}, h('span', {class: 'flabel'}, 'Repo (owner/name or clone URL)'), spec,
+            h('div', {class: 'row'}, h('button', {class: 'btn primary', 'data-run': 'init_data_repo', title: RUN_TIPS.init_data_repo, onclick: go}, D.actions.init_data_repo)));
         })(),
         h('h3', {}, '📥 Option 2: clone a data repo someone shared with you'),
         h('p', {class: 'small'}, 'Git asks you to sign in to GitHub once.'),
         howBox('A collaborator with access can clone it here and load the shared corpus (papers, abstracts, digests) without a terminal. Git asks you to sign in to GitHub once. (Read access only? Add it under “Shared repos to read” instead.)'),
         (() => {
-          const url = h('input', {class: 'in wide mono', value: D.data_url, 'aria-label': 'clone URL'});
-          const dir = h('input', {class: 'in wide mono', value: S.data_repo_dir || '../ic-paper-radar-data', 'aria-label': 'clone folder'});
-          return h('div', {}, h('div', {class: 'row'}, h('span', {class: 'small', style: 'width:6em'}, 'Repo URL'), h('div', {style: 'flex:1'}, url)),
-            h('div', {class: 'row'}, h('span', {class: 'small', style: 'width:6em'}, 'Into folder'), h('div', {style: 'flex:1'}, dir)),
+          const url = ta({class: 'in wide mono', value: D.data_url, 'aria-label': 'clone URL'}, {single: ''});
+          const dir = ta({class: 'in wide mono', value: S.data_repo_dir || '../ic-paper-radar-data', 'aria-label': 'clone folder'}, {single: ''});
+          return h('div', {}, h('div', {class: 'field'}, h('span', {class: 'flabel'}, 'Repo URL'), url),
+            h('div', {class: 'field'}, h('span', {class: 'flabel'}, 'Into folder ', h('span', {class: 'muted small'}, '(paths.data_repo_dir)')), dir),
             h('div', {class: 'row'}, h('button', {class: 'btn primary', 'data-run': 'clone', onclick: () => {
               const d = dir.value.trim();
               run('pull_data_repo', {clone_url: url.value.trim(), clone_dir: d === '../ic-paper-radar-data' ? '' : d}); }}, '📥 Clone & Connect Private Data Repo'),
@@ -2216,7 +2253,7 @@ function renderRepo() {
   const reads = h('div', {}, h('h3', {}, '📚 Shared repos to read (data_repo.read_repos)'),
     h('p', {class: 'small muted'}, 'Repos collaborators shared with you (read access is enough): pulled only, never pushed; isolated by default.'),
     howBox('Private data repos your collaborators shared with you (read access is enough): pulled into <data_repo_dir>_peers/ and never pushed. Each one is an isolated dashboard by default (📚 Switch Radar / Repo in the dashboard header; 0 papers enter your store); merge a similar-domain repo into your corpus with “Merge & Sync Corpus”. owner/name, a clone URL or a local folder.'),
-    chips(dro.read_repos, {placeholder: 'colleague/their-paper-radar-data', size: 34,
+    chips(dro.read_repos, {placeholder: 'colleague/their-paper-radar-data, a clone URL or a folder', long: true,
       check: v => (/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(v) || /^(https:\/\/[A-Za-z0-9.-]+\/|git@[A-Za-z0-9.-]+:)[\w.-]+\/[\w.-]+$/.test(v) || /[\\/]/.test(v)) ? null : 'owner/name, https://…, git@… or a folder'}),
     rr.length ? h('table', {class: 'mini'}, h('tbody', {}, rr.map(x => h('tr', {}, h('td', {class: 'small'}, h('code', {}, x.spec),
       h('div', {class: 'muted small'}, x.error ? h('span', {class: 'warn'}, x.error) : (x.ready ? `${fmt(x.papers)} papers` : '⏳ pulled on the next 📥 Read'))),
@@ -2225,15 +2262,17 @@ function renderRepo() {
     h('div', {class: 'runbar'}, runBtn('pull_data_repo'), runBtn('sync_data_repo', null, false, '🔄 Full Sync with Primary Repo'),
       !dr.connected ? h('button', {class: 'btn', title: 'Create your own private data repo, or clone one shared with you', onclick: () => {
         const e = $('#repoopts'); if (!e) return; e.scrollIntoView({behavior: 'smooth', block: 'center'});
-        const i = e.querySelector('input'); if (i) setTimeout(() => i.focus({preventScroll: true}), 350); }}, '📦 Clone / Init') : null),
+        const i = e.querySelector('.in'); if (i) setTimeout(() => i.focus({preventScroll: true}), 350); }}, '📦 Clone / Init') : null),
     h('p', {class: 'muted small'}, dr.connected ? '📥 Read pulls only (safe any time) · 🔄 Full Sync also pushes to your repo' + (STARTER ? '.' : ' (automatic on Fridays at 12:30).')
       : (dro.read_repos.length ? 'Read works now (shared repos only); Full Sync needs your own repo: 📦 Clone / Init below.' : 'Solo use works without a repo. For a team: 📦 Clone / Init below.')),
     head,
     h('h3', {}, 'My sharing'), h('p', {id: 'sharestats', class: 'small'}),
-    h('div', {class: 'row'}, h('label', {}, 'peer_id ', h('input', {class: 'in', size: 18, maxlength: 39, value: dro.peer_id, placeholder: dr.me || 'your-name',
+    h('label', {class: 'field'}, h('span', {class: 'flabel'}, 'peer_id ', h('span', {class: 'muted small'}, '(your name in the shared repo)')),
+      h('input', {class: 'in', maxlength: 39, style: 'max-width:360px', value: dro.peer_id, placeholder: dr.me || 'your-name',
         title: 'Your name in the shared repo (peers/<peer_id>.json). Empty = the clone\'s git user.name.', oninput: e => { dro.peer_id = e.target.value.trim(); changed(); }})),
-      h('label', {style: 'flex:1 1 300px'}, 'remote_url ', h('input', {class: 'in mono', style: 'flex:1 1 220px;min-width:0', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
-        title: 'Your primary private data repo. A new computer clones it into paths.data_repo_dir automatically.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}))),
+    h('label', {class: 'field'}, h('span', {class: 'flabel'}, 'remote_url ', h('span', {class: 'muted small'}, '(your primary private data repo)')),
+      ta({class: 'in mono', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
+        title: 'Your primary private data repo. A new computer clones it into paths.data_repo_dir automatically.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}, {single: ''})),
     h('div', {class: 'row'}, toggle(dro, 'share_curation', 'share my curation', 'Write peers/<peer_id>.json (pillars, marks, ⭐, notes) so collaborators see your radar'),
       toggle(dro, 'share_notes', 'share my 🏷️ notes', 'Include your Tech notes in the overlay'),
       toggle(dro, 'adopt_external', 'adopt shared papers ≥ min_score', 'Merged papers that score ≥ min_score with your keywords join your archive (and can reach your pillars)')),
@@ -2242,7 +2281,7 @@ function renderRepo() {
       h('div', {class: 'grid2'},
         h('div', {}, h('div', {class: 'small muted'}, 'Queries (one arXiv search_query per line)'), linesList(ax.queries)),
         h('div', {}, h('div', {class: 'small muted'}, 'must_all: one group per line, terms separated by commas (a paper needs a term of every group)'),
-          h('textarea', {class: 'in', oninput: e => { ax.must_all = e.target.value.split('\n').map(l => l.split(',').map(x => x.trim()).filter(Boolean)).filter(g => g.length); changed(); }},
+          h('textarea', {class: 'in auto-grow', rows: 2, oninput: e => { ax.must_all = e.target.value.split('\n').map(l => l.split(',').map(x => x.trim()).filter(Boolean)).filter(g => g.length); changed(); }},
             (ax.must_all || []).map(g => g.join(', ')).join('\n')))),
       h('div', {class: 'grid2'}, h('div', {}, h('div', {class: 'small muted'}, 'Categories (empty = all)'), chips(ax.categories, {placeholder: 'e.g. cs.AR', check: v => /^[a-z-]+(\.[A-Za-z-]+)?$/.test(v) ? null : 'An arXiv category looks like cs.AR or eess.SP'})),
         h('div', {}, h('div', {class: 'small muted'}, 'exclude_any'), chips(ax.exclude_any, {placeholder: 'e.g. quantum'})))) : null,
@@ -2319,8 +2358,9 @@ function renderPreset() {
 let SEARCH_T = null;
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 function renderSearch() {
-  const inp = h('input', {class: 'in wide', placeholder: 'Search the whole store: title ×5, 🏷️ notes ×3, index terms, authors, abstract (e.g. “bootstrapped switch”, Makinwa)…'});
   const out = h('div', {id: 'sresults'});
+  const inp = ta({class: 'in wide', placeholder: 'Search the whole store: title ×5, 🏷️ notes ×3, index terms, authors, abstract (e.g. “bootstrapped switch”, Makinwa)…'},
+    {single: ' ', enter: () => { clearTimeout(SEARCH_T); doSearch(inp.value, out); }});
   inp.addEventListener('input', () => { clearTimeout(SEARCH_T); SEARCH_T = setTimeout(() => doSearch(inp.value, out), 250); });
   fill($('#c-search'), h('h2', {}, '🔎 Search the store', h('span', {class: 'muted small'}, ST.store.fts ? 'SQLite FTS5 · bm25 · milliseconds' : 'LIKE search (no FTS5 index yet)')),
     API ? [inp, out] : h('p', {class: 'muted small'}, 'Needs the Control Center server (Start_Radar_GUI / briefing.py --gui, or the radar\'s sync server). In a terminal: python briefing.py --recall "<words>".'));
