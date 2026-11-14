@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.1.0)
+# 📡 Engineer Paper Radar (v3.1.1)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,14 +13,14 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.1.0
-*v3.1.0 亮点*
+## ✨ What's new in v3.1.1
+*v3.1.1 亮点*
 
 1. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
-   long explanations sit behind **💡 How this works**. The Quick Start below now starts from `git clone`.\
+   long explanations sit behind **💡 How this works**. v3.1.1 fixes phone widths: long paths now wrap. The Quick Start below now starts from `git clone`.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。快速开始改为从 `git clone` 开始。
 2. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
@@ -1116,7 +1116,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.1.0},
+  version   = {3.1.1},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}

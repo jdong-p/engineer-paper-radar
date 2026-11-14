@@ -1201,7 +1201,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.0</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.1</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1327,7 +1327,18 @@ details.fine{border:1px solid var(--line);border-radius:12px;padding:0 14px;marg
 details.fine>summary{cursor:pointer;padding:12px 0;font-weight:700;font-size:16.5px}details.fine[open]>summary{border-bottom:1px dashed var(--line)}
 .emailbox{border:2px solid var(--warn);border-radius:12px;padding:12px 14px;margin:10px 0;background:var(--chip)}.emailbox.ok{border-color:var(--ok)}
 .emailbox label{display:block;font-weight:700;font-size:16.5px;margin-bottom:6px}.ccp .emailbox .in{font-size:16px;width:min(100%,380px)}
+/* v3.1.1: nothing may push the page wider than a phone (long C:\... paths, .sqlite names, commit lines) */
+html,body.ccp{max-width:100%;overflow-x:hidden}.ccp *,.ccp *::before,.ccp *::after{box-sizing:border-box}
+main.cc,.cc .card,.step-card,.sbody,.sbody>section,details.fine,.pods,.pod,.qa,.emailbox,.legendbox{max-width:100%;min-width:0}
+.cc .card,.step-card,.sbody>section,details.fine{overflow-x:hidden}
+.ccp .kv{grid-template-columns:max-content minmax(0,1fr)}.grid2{grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr))}
+.row>*,.chips>*,.runbar>*,.kv>*,.grid2>*,.dgrid>*,.cockpit>*,.pods>*,.ph>*,.step-card>summary>*,.adder>*{min-width:0}
+.ccp code,.ccp .mono,.ccp .tag,.ccp .kv>*,.ccp .ssum,.ccp .small,.ccp .spill,.ccp .dcard,.ccp table.mini td,.ccp table.mini th,.ccp .topicres{
+overflow-wrap:anywhere;word-break:break-word}.ccp code,.ccp .tag,.ccp .spill{white-space:normal}
+.ccp .in{max-width:100%}.ccp .row label{flex-wrap:wrap;max-width:100%}.ccp table.mini{table-layout:auto;max-width:100%}.ccp .nowrap{white-space:normal}
 @media (max-width:860px){.cc .cockpit{grid-template-columns:1fr}.ssum{padding-left:0}.stitle{font-size:17px}}
+@media (max-width:560px){.ccp .kv{grid-template-columns:minmax(0,1fr)}.ccp .kv>b{margin-top:4px}.ccp main.cc{padding-left:10px;padding-right:10px}
+.cc .card,.sbody{padding-left:12px;padding-right:12px}.step-card>summary{padding:12px}}
 """
 
 JS = r"""
@@ -2221,7 +2232,7 @@ function renderRepo() {
     h('h3', {}, 'My sharing'), h('p', {id: 'sharestats', class: 'small'}),
     h('div', {class: 'row'}, h('label', {}, 'peer_id ', h('input', {class: 'in', size: 18, maxlength: 39, value: dro.peer_id, placeholder: dr.me || 'your-name',
         title: 'Your name in the shared repo (peers/<peer_id>.json). Empty = the clone\'s git user.name.', oninput: e => { dro.peer_id = e.target.value.trim(); changed(); }})),
-      h('label', {style: 'flex:1'}, 'remote_url ', h('input', {class: 'in mono', style: 'flex:1;min-width:240px', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
+      h('label', {style: 'flex:1 1 300px'}, 'remote_url ', h('input', {class: 'in mono', style: 'flex:1 1 220px;min-width:0', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
         title: 'Your primary private data repo. A new computer clones it into paths.data_repo_dir automatically.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}))),
     h('div', {class: 'row'}, toggle(dro, 'share_curation', 'share my curation', 'Write peers/<peer_id>.json (pillars, marks, ⭐, notes) so collaborators see your radar'),
       toggle(dro, 'share_notes', 'share my 🏷️ notes', 'Include your Tech notes in the overlay'),
