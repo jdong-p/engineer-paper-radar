@@ -63,6 +63,8 @@ def _kw_pillars(cfg):
 def pillar_of(p, kwmap):
     if p.get("pillar"):  # chosen by the user (--add --pillar)
         return p["pillar"]
+    if p.get("retired_pillar"):  # v3.0.8: 🏺 a retired pillar's paper never joins a later pillar with that number
+        return 0
     m = re.search(r"\*\*Pillar:\*\*\s*\(?(?:Pillar\s*)?(\d+)", p.get("digest") or "")
     if m and str(p.get("digest_ver") or "").split("+")[0] in PILLAR_DIGEST_VERS and int(m[1]) in PILLARS and int(m[1]):
         return int(m[1])
@@ -220,7 +222,8 @@ def _row(p, cfg):
     return (f"| {_cell(str(p.get('published') or '')[:10])} | {p['venue']} | "
             f"[{_cell(fetcher.tidy_tex(p['title']))}](https://doi.org/{p['doi']}) | {_cell(_first_last(p))} | {silicon(p, cfg)} | "
             f"{PIN_TAG.get(p.get('pin'), p['status'])}{' · W' + p['week'][-2:] if p.get('week') else ''}"
-            f"{' · 📈 Ext.' if p.get('lineage') else ''} | {_cell(note + key_numbers(p))} | "
+            f"{' · 📈 Ext.' if p.get('lineage') else ''}{' · 🏺 ' + _cell(p['retired_pillar']) if p.get('retired_pillar') else ''}"
+            f" | {_cell(note + key_numbers(p))} | "
             f"{curation.boxes(p['doi'], curation.mark_of(p), table=True)} |")
 
 

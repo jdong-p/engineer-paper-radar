@@ -761,23 +761,26 @@ def _topic_status(cfg):
         rel = Path(os.path.relpath(td, root)).as_posix()
     except ValueError:
         rel = td.name
-    out = {"dir": rel, "dives": [], "recalls": []}
+    out = {"dir": rel, "dives": [], "recalls": [], "antique_pillars": []}
     sp = HERE / cfg["paths"]["store_file"]
-    topics = {}
+    topics, ant = {}, {}
     if sp.exists():
         c = _ro(sp)
         try:
             r = c.execute("SELECT value FROM meta WHERE key='topics'").fetchone()
             topics = json.loads(r[0]) if r and r[0] else {}
+            r = c.execute("SELECT value FROM meta WHERE key='retired_pillars'").fetchone()  # v3.0.8: 🏺 antique pillars
+            ant = json.loads(r[0]) if r and r[0] else {}
         except (sqlite3.Error, ValueError):
             topics = {}
         finally:
             c.close()
+    out["antique_pillars"] = [{"key": k, **v} for k, v in sorted(ant.items(), key=lambda kv: kv[1].get("retired_at", ""))]
     for slug, t in sorted(topics.items(), key=lambda kv: str(kv[1].get("date") or ""), reverse=True):
         dois, nc = t.get("dois") or [], int(t.get("n_classic") or 0)
         f = td / f"{t.get('date')}_{slug}.html"
         out["dives"].append({"slug": slug, "query": t.get("query") or slug, "date": t.get("date") or "", "n_classic": nc,
-                             "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:6],
+                             "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:6], "retired": bool(t.get("retired")),
                              "href": f"{rel}/{f.name}" if f.exists() else ""})
     if td.is_dir():
         fs = sorted(td.glob("*_recall_*.html"), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
@@ -828,7 +831,8 @@ ACTIONS = {"rescore_and_seed": "▶ Run & Update My Dashboard", "pull_data_repo"
            "sync_data_repo": "🔄 Full Sync with My Private Repo", "daily": "🌐 Fetch New Papers Now",
            "init_data_repo": "✨ Create / Init My Private Repo",
            "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Full Topic Dive (6 Classics + 8 SOTA)",
-           "drop_topic": "✕ Remove Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers"}
+           "drop_topic": "🗑 Delete Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers",
+           "retire_topic": "🏺 Retire Topic Dive", "unretire_topic": "↺ Restore Topic Dive", "retire_pillar": "🏺 Retire Pillar"}
 TOPIC_ACTIONS = ("topic_recall", "topic_dive")
 SLUG_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
@@ -843,6 +847,9 @@ def plan(action, cfg, opts=None):
     return {"topic_recall": [["--recall=" + q]],
             "topic_dive": [["--topic=" + q] + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
             "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],
+            "retire_topic": [["--retire-topic=" + str(o.get("slug") or "<slug>")]],  # v3.0.8: 🏺 Retire as Antique
+            "unretire_topic": [["--unretire-topic=" + str(o.get("slug") or "<slug>")]],
+            "retire_pillar": [["--retire-pillar", str(o.get("pillar") or "N")]],
             # v3.0.7 ＋ Add New Pillar: re-score with the new keywords, file its anchors under it, seed ≥ 10 candidates
             "add_pillar": [["--rescore", "--seed-pillars", "5", "--no-claude"]
                            + (["--pillar", str(o.get("pillar") or "N"), "--pin-anchors", *o["anchors"]] if o.get("anchors") else [])],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
@@ -1109,7 +1116,14 @@ def api_post(path, req, jobs):
                 if not 3 <= len(qq) <= 300 or not re.search(r"[^\W\d_]{2}", qq):
                     return 400, {"ok": False, "error": "type a topic or research question (3–300 characters)"}
                 req["query"], req["zero"] = qq, bool(req.get("zero"))
-            if action == "drop_topic" and not SLUG_RX.match(str(req.get("slug") or "")):
+            if action == "retire_pillar":  # v3.0.8: an existing, non-fixed pillar, and nothing else unsaved with it
+                import catalog
+                load_cfg()
+                n = req.get("pillar")
+                if not isinstance(n, int) or isinstance(n, bool) or n not in catalog.PILLARS or n <= fixed_pillars() or not n:
+                    return 400, {"ok": False, "error": "retire_pillar: not a pillar that can be retired"}
+                req.pop("config", None)
+            if action in ("drop_topic", "retire_topic", "unretire_topic") and not SLUG_RX.match(str(req.get("slug") or "")):
                 return 400, {"ok": False, "error": "unknown topic dive"}
             _, changed = _save(req)
             if action == "init_data_repo":
@@ -1181,7 +1195,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.7</span></h1>
+<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.8</span></h1>
 <a class="btn" href="DASHBOARD.html">📊 Open Dashboard ↗</a>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
@@ -1572,8 +1586,10 @@ function renderThemes() {
          h('input', {class: 'in short', value: p.short, maxlength: 24, placeholder: 'short label', title: '1–2 words for phones and the Pillar column (optional)', oninput: e => { p.short = e.target.value; changed(); }}),
          h('button', {class: 'btn small', title: 'Move up', disabled: i === FIX, onclick: () => { KW.pillars.splice(i - 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↑'),
          h('button', {class: 'btn small', title: 'Move down', disabled: i === KW.pillars.length - 1, onclick: () => { KW.pillars.splice(i + 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↓'),
-         h('button', {class: 'btn small danger', title: 'Remove this pillar and its keywords', onclick: () => {
-           if (!confirm(`Remove pillar ${i + 1} “${p.name}” and its ${p.kws.length} keywords?`)) return;
+         savedPillar(i) ? h('button', {class: 'btn small', 'data-run': 'retire_pillar', title: '🏺 Retire as Antique: its papers keep a 🏺 badge, marks, notes and digests; its keywords leave config.json (saved in _system/retired_pillars_config.json); pillars after it move up one number',
+                                       onclick: () => retirePillar(i)}, '🏺 Retire')
+           : h('button', {class: 'btn small danger', title: 'Remove this new (unsaved) pillar', onclick: () => {
+           if (!confirm(`Remove the new pillar ${i + 1} “${p.name}” and its ${p.kws.length} keywords?`)) return;
            KW.pillars.splice(i, 1); renderThemes(); changed(); }}, '✕')]
       : [h('span', {class: 'num'}, `P${i + 1}`), h('b', {class: 'name'}, p.name.replace(/^Pillar\s*\d+\s*[—–-]\s*/, '')), p.short ? h('span', {class: 'tag'}, p.short) : null];
     return h('div', {class: 'pillar'}, h('div', {class: 'ph'}, head, h('span', {class: 'muted small', 'data-pcount': i + 1})), chips(p.kws, kwOpts(p.kws)));
@@ -1589,7 +1605,7 @@ function renderThemes() {
     FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar (catalog.py; their cached digests name them); their keywords are editable. Add new pillars after them.`) : null,
     h('div', {class: 'row'}, h('button', {class: 'btn primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
       h('span', {class: 'muted small'}, 'name, anchors and seed words → 🪄 planned keywords for the new pillar only → its first 10 candidates')),
-    ps, loose, orph,
+    ps, loose, orph, antiquePillars(),
     true ? h('div', {class: 'row'}, h('button', {class: 'btn', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
       KW.pillars.push({name: '', short: '', marker: null, kws: []}); renderThemes(); changed();
       const ins = document.querySelectorAll('.pillar .name'); if (ins.length) ins[ins.length - 1].focus(); }}, '＋ Add pillar'),
@@ -1628,8 +1644,13 @@ function topicRun(a) {
 }
 function dropTopic(t) {
   if (!API) return topicStatic([`${pyCmd()} briefing.py --drop-topic ${t.slug}`]);
-  if (!confirm(`Remove the topic dive “${t.query}” (${t.date}) from 🔎 Topic Dives? Its papers and report files stay.`)) return;
+  if (!confirm(`Delete the topic dive “${t.query}” (${t.date}) permanently? Its papers lose their 🔎 / 🏺 badge (marks, notes and report files stay). 🏺 Retire keeps everything.`)) return;
   run('drop_topic', {slug: t.slug});
+}
+function retireTopic(t, back) {  // v3.0.8: 🏺 Retire as Antique / ↺ Restore (non-destructive)
+  const a = back ? 'unretire_topic' : 'retire_topic';
+  if (!API) return topicStatic([`${pyCmd()} briefing.py --${back ? 'unretire' : 'retire'}-topic ${t.slug}`]);
+  run(a, {slug: t.slug});
 }
 function seedWords(q) {
   return q.split(/[,;]|\b(?:and|focusing on|focused on|with|for|in|of|on|using|via|towards?)\b/i)
@@ -1650,6 +1671,24 @@ function topicPreview() {  // v3.0.7: the concept groups topic.py will search fo
 function promoteDive(t) {
   const name = t.query.length > 60 ? t.query.slice(0, 59).replace(/\s+\S*$/, '') + '…' : t.query;
   addPillarWizard({name: name.charAt(0).toUpperCase() + name.slice(1), seeds: seedWords(t.query), anchors: t.classics.slice(0, 6)});
+}
+
+// ---------- 🏺 Retire a pillar (v3.0.8, retire.py): a pillar saved in config.json, nothing else unsaved ----------
+function savedPillar(i) { return i < S.pillars.length && (KW.pillars[i].name || '').trim() === (S.pillars[i] || '').trim(); }
+function retirePillar(i) {
+  const p = KW.pillars[i], n = i + 1;
+  if (isDirty()) return alert('Save (💾) or reload your other changes first: retiring renumbers the pillars after this one.');
+  if (!API) return showConsole('Run this in a terminal', null, [cmdRow(`${pyCmd()} briefing.py --retire-pillar ${n}`)]);
+  if (!confirm(`🏺 Retire pillar ${n} “${p.name}” as an antique?\n\n• Its papers keep a 🏺 badge with their marks, ⭐, notes and digests (dashboard → 📅 Weekly Brief → 🏺 Antiques).\n` +
+               `• Its unreviewed candidates go back to the corpus; its ${p.kws.length} keywords leave config.json (a copy is kept in _system/retired_pillars_config.json).\n` +
+               `• Pillars after it move up one number. A new pillar ${n} later never mixes with these papers.`)) return;
+  run('retire_pillar', {pillar: n});
+}
+function antiquePillars() {
+  const A = (ST.topics || {}).antique_pillars || [];
+  return A.length ? h('div', {class: 'pillar muted'}, h('div', {class: 'ph'}, h('b', {}, `🏺 Antique pillars (${A.length})`),
+      h('span', {class: 'muted small'}, 'retired: their papers keep a 🏺 badge; browse them in the dashboard\'s 📅 Weekly Brief → 🏺 Antiques')),
+    h('div', {class: 'chips'}, A.map(a => h('span', {class: 'chip', title: `${a.name} · was P${a.id} · retired ${a.retired_at}`}, `🏺 ${a.key} · ${a.papers} papers`)))) : null;
 }
 
 // ---------- ＋ Add New Pillar (Guided), v3.0.7: one new pillar P<N+1>; P1..P<N> stay byte-for-byte as they are ----------
@@ -1768,13 +1807,16 @@ function renderTopic() {
       href ? h('a', {class: 'btn small primary', href, target: '_blank'}, TLAST.a === 'topic_dive' ? '📄 Open Topic Report' : '📄 Open Recall Results') : h('span', {class: 'muted small'}, '(no report page yet: see the console)'),
       TLAST.a === 'topic_dive' ? h('a', {class: 'btn small', href: 'DASHBOARD.html#topics', target: '_blank'}, '📊 DASHBOARD → 🔎 Topic Dives') : null);
   }
-  const dives = T.dives.length ? h('table', {class: 'mini topictab'}, h('tbody', {}, T.dives.map(t => h('tr', {},
-    h('td', {}, h('b', {}, '🔎 ' + t.query), h('div', {class: 'muted small'}, t.date)),
+  const order = T.dives.filter(t => !t.retired).concat(T.dives.filter(t => t.retired));
+  const dives = T.dives.length ? h('table', {class: 'mini topictab'}, h('tbody', {}, order.map(t => h('tr', {class: t.retired ? 'muted' : ''},
+    h('td', {}, h('b', {}, (t.retired ? '🏺 ' : '🔎 ') + t.query), t.retired ? h('span', {class: 'tag'}, '🏺 Antique') : null, h('div', {class: 'muted small'}, t.date)),
     h('td', {class: 'small nowrap', title: `${t.n_classic} foundational classics + ${t.n_recent} recent SOTA papers`}, `${t.n_classic}🏛️ + ${t.n_recent}🚀`),
     h('td', {class: 'nowrap'}, t.href ? h('a', {class: 'btn small', href: t.href, target: '_blank'}, '📄 Report') : h('span', {class: 'muted small'}, 'no report'),
       h('button', {class: 'btn small', title: 'Open ＋ Add New Pillar, pre-filled with this dive\'s title, words and 🏛️ classic DOIs (as anchors)',
                    disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => promoteDive(t)}, '📌 Promote Dive to Weekly Pillar'),
-      h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Remove this dive from 🔎 Topic Dives (meta topics). Its papers and report files stay.', onclick: () => dropTopic(t)}, '✕'))))))
+      t.retired ? h('button', {class: 'btn small', 'data-run': 'unretire_topic', title: 'Bring this dive back to 🔎 Topic Dives', onclick: () => retireTopic(t, true)}, '↺ Restore')
+                : h('button', {class: 'btn small', 'data-run': 'retire_topic', title: '🏺 Retire as Antique: the dive moves to Past / Antique Dives on the dashboard; its papers keep their badge, marks, notes and reports', onclick: () => retireTopic(t)}, '🏺 Retire'),
+      h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Delete permanently (the papers lose this dive\'s badge; marks, notes and report files stay)', onclick: () => dropTopic(t)}, '🗑'))))))
     : h('p', {class: 'muted small'}, 'No topic dives yet.');
   fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
     h('div', {class: 'row'}, inp),

@@ -157,6 +157,7 @@ gap:4px;min-width:230px;max-height:75vh;overflow-y:auto;box-shadow:0 8px 24px rg
 .tagpill{cursor:pointer;opacity:.75}.tagpill:hover{opacity:1}
 .topicbar{background:var(--chip)}a.btn.newdive{text-decoration:none;border-style:dashed;color:var(--muted)}.topicbar a.btn{text-decoration:none}.tag.tlink{cursor:pointer;color:var(--accent)}
 .tier3{background:var(--bg);padding-top:6px;padding-bottom:6px}.tlabel{align-self:center}.push{flex:1}
+.tag.antique{background:transparent;border:1px dashed var(--line);color:var(--muted)}
 .tag.notetag{background:var(--citebg);color:var(--fg);font-weight:600}
 .noteline{display:flex;flex-wrap:wrap;align-items:center;gap:6px}input.note{flex:1;min-width:220px;max-width:640px;
 padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);font:inherit;font-size:13.5px}
@@ -533,6 +534,7 @@ def topic_dives(store, cfg):
             roles = ["classic" if 0 < (relations._ym(p.get("published")) or 0) // 12 < y0 else "recent" for p in papers]
         report = Path(cfg["paths"]["topic_dir"]) / f"{t['date']}_{slug}.md"
         out.append({"slug": slug, "query": t["query"], "date": t["date"], "short": _topic_short(t, cfg),
+                    "retired": bool(t.get("retired")),  # v3.0.8: 🏺 Past / Antique Dives
                     "href": f"{Path(cfg['paths']['topic_dir']).name}/{report.stem}.html" if report.exists() else "",
                     "papers": [{"doi": p["doi"], "role": r, "rank": i} for i, (p, r) in enumerate(zip(papers, roles))]})
     return out
@@ -548,7 +550,8 @@ def paper_records(store, cfg, dives=None):
     for _, ps in catalog.gather(store, cfg):
         for p in ps:
             pool[p["doi"]] = p
-    for p in store.where("user_mark IN ('selected','archived') OR cited=1"):
+    for p in store.where("user_mark IN ('selected','archived') OR cited=1 OR (retired_pillar IS NOT NULL AND "
+                         "(status != 'archive' OR COALESCE(user_note,'') != '' OR pin IS NOT NULL))"):  # + 🏺 antiques
         pool[p["doi"]] = p
     if cfg.get("dashboard_corpus"):  # Starter Edition: the whole pre-loaded IEEE corpus is searchable under "All"
         for p in store.where("grp='ieee' AND status != 'external_ro'"):  # not a read_repos friend's corpus
@@ -583,6 +586,7 @@ def _record(p, cfg, kwmap, keys, in_topic):
                                 f"<a href='https://doi.org/{l['doi']}'>{html.escape(l['title'])}</a> "
                                 f"<span class='muted'>({html.escape(l['signal'])})</span></p>" for l in lin),
         "abstract": p.get("abstract") or "", "mark": curation.mark_of(p), "note": p.get("user_note") or "",
+        "antique": p.get("retired_pillar") or "",  # v3.0.8: 🏺 the retired pillar it belonged to
         "bib": catalog.bib_entry(p, key)}
 
 
@@ -625,6 +629,10 @@ def weekly_reports(cfg):
 
 DASH_JS = r"""
 const P = PAGE.papers, DIVES = PAGE.topics || [], DIVE = Object.fromEntries(DIVES.map(t => [t.slug, t]));
+// v3.0.8: 🏺 retired dives (in a menu at the end of the tier-2 bar) and retired pillars (🏺 Antiques ▾ in 📅 Weekly Brief)
+const LIVE_DIVES = DIVES.filter(t => !t.retired), OLD_DIVES = DIVES.filter(t => t.retired);
+const ANTIQUES = PAGE.antiques || [], ANT = Object.fromEntries(ANTIQUES.map(a => [a.k, a]));
+const ANT_BY_KEY = Object.fromEntries(ANTIQUES.map(a => [a.key, a]));
 const BY_DOI = Object.fromEntries(P.map(p => [p.doi, p]));
 // three tiers: 1 = the view (top bar) · 2 = 📅 Weekly Brief's pillar / 🌍 Beyond IEEE (wsel) or 🔎 Topic Dives'
 // dive (topicSel) · 3 = the curation stage inside either (sub)
@@ -639,7 +647,7 @@ let tagsOn = false; try { tagsOn = localStorage.getItem('paper_radar_tags') === 
 const PILLARS = PAGE.pillars || [];
 const GROUPS = PILLARS.map(x => [x.k, x.short, x.name]).concat([['beyond', '🌍 Beyond IEEE', '🌍 Beyond IEEE (Nature / Science): the rolling board']]);
 const GROUPED = Object.fromEntries(PILLARS.map(x => [x.k, p => p.pillar === x.n]).concat([['beyond', p => p.beyond]]));
-const GROUP_LABEL = Object.fromEntries(GROUPS.map(([k, l]) => [k, l]));
+const GROUP_LABEL = Object.fromEntries(GROUPS.map(([k, l]) => [k, l]).concat(ANTIQUES.map(a => [a.k, '🏺 ' + a.key])));
 const WEEKS = PAGE.weeks || [];  // [{week, href}] newest first
 let wkSel = WEEKS.length ? WEEKS[0].week : '';
 // primary views stay on one row; the rest live in the 📁 More Views folder
@@ -731,8 +739,9 @@ function reviewed(p) { return stageOf(p.doi) !== 'normal' || citedOf(p.doi); }
 // tier 2: in 📅 Weekly Brief, the radar's own papers (weekly / catch-up / pinned) plus reviewed papers of a pillar
 // or Beyond IEEE (w = 'all' or a group); in 🔎 Topic Dives, the papers of every dive or of one (t)
 function inTier2(p, v, w, t) {
+  if (v === 'weekly' && ANT[w]) return p.antique === ANT[w].key;  // 🏺 a retired pillar's whole collection
   if (v === 'weekly') return (p.core || (reviewed(p) && (p.pillar > 0 || p.beyond))) && (w === 'all' || GROUPED[w](p));
-  if (v === 'topic') return t === 'all' ? p.topics.length > 0 : p.topics.some(x => x.slug === t);
+  if (v === 'topic') return t === 'all' ? p.topics.some(x => DIVE[x.slug] && !DIVE[x.slug].retired) : p.topics.some(x => x.slug === t);
   return false;
 }
 // tier 3: stage (st) and ⭐ (c) are independent: a ✅ Selected + ⭐ paper shows under both Selected and Cite
@@ -759,9 +768,9 @@ function setSub(s) { sub = s; menu = ''; render(); }
 function toggleMenu(m) { menu = menu === m ? '' : m; render(); }
 // a 📁 folder: a button (highlighted, showing the active entry's name, when one of its entries is active) and,
 // when open, a small menu below it
-function folder(id, items, active, label, onpick) {
+function folder(id, items, active, label, onpick, icon) {
   const cur = items.find(([k]) => k === active);
-  const btn = `<button class="btn ${cur?'on':''}" onclick="event.stopPropagation();toggleMenu('${id}')">📁 ${cur ? cur[1] : label} ▾</button>`;
+  const btn = `<button class="btn ${cur?'on':''}" onclick="event.stopPropagation();toggleMenu('${id}')">${icon == null ? '📁 ' : icon}${cur ? cur[1] : label} ▾</button>`;
   return `<span class="more">${btn}` + (menu === id ? `<span class="menu" onclick="event.stopPropagation()">` +
     items.map(([k, l, n]) => `<button class="btn ${active===k?'on':''}" onclick="${onpick}('${k}')">${l} <span class="muted count">${n}</span></button>`).join('') +
     `</span>` : '') + `</span>`;
@@ -791,7 +800,9 @@ function tier2() {
     const b = (w, label, title) => `<button class="btn ${wsel===w?'on':''}" title="${escA(title)}" onclick="setW('${w}')">` +
       `${label} <span class="muted count">${n(w)}</span></button>`;
     el.innerHTML = `<span class="muted tlabel">📅 Weekly Brief:</span>` + b('all', 'All Weekly', 'Every pillar and 🌍 Beyond IEEE') +
-      GROUPS.map(([k, l, t]) => b(k, l, t)).join('') + weekLink() + addPillar;
+      GROUPS.map(([k, l, t]) => b(k, l, t)).join('') + weekLink() +
+      (ANTIQUES.length ? folder('antpillars', ANTIQUES.map(a => [a.k, `🏺 ${esc(a.key)} <span class="muted">· retired ${a.retired_at}</span>`,
+        P.filter(p => p.antique === a.key).length]), wsel, `🏺 Antiques (${ANTIQUES.length})`, 'setW', '') : '') + addPillar;
     return;
   }
   // v3.0.6: ＋ New Topic Dive ↗ opens STARTUP.html's 🔎 Topic Deep-Dive card (not on a read-only peer page)
@@ -806,9 +817,12 @@ function tier2() {
     el.style.display = '';
     const pill = (slug, label, title) => `<button class="btn ${topicSel===slug?'on':''}" title="${escA(title)}" onclick="showTopic('${slug}')">${label}</button>`;
     el.innerHTML = `<span class="muted tlabel">🔎 Topic Dives:</span>` +
-      pill('all', `All dives <span class="muted count">${DIVES.length}</span>`, 'every topic dive') + DIVES.map(t =>
+      pill('all', `All dives <span class="muted count">${LIVE_DIVES.length}</span>`, 'every active topic dive') + LIVE_DIVES.map(t =>
       pill(t.slug, `🔎 ${esc(t.short)} <span class="muted">· ${t.date} · ${t.papers.length} papers</span>`, t.query) +
-      (t.href ? `<a class="btn" href="${t.href}" target="_blank" title="${escA(t.query)}">📄 Open Topic Report</a>` : '')).join('') + newDive;
+      (t.href ? `<a class="btn" href="${t.href}" target="_blank" title="${escA(t.query)}">📄 Open Topic Report</a>` : '')).join('') +
+      (OLD_DIVES.length ? folder('antdives', OLD_DIVES.map(t => [t.slug, `🏺 ${esc(t.short)} <span class="muted">· ${t.date}</span>`, t.papers.length]),
+        topicSel, `🏺 Past / Antique Dives (${OLD_DIVES.length})`, 'showTopic', '') : '') +
+      (DIVE[topicSel] && DIVE[topicSel].retired && DIVE[topicSel].href ? `<a class="btn" href="${DIVE[topicSel].href}" target="_blank">📄 Open 🏺 Report</a>` : '') + newDive;
     return;
   }
   el.style.display = 'none'; el.innerHTML = '';
@@ -884,7 +898,7 @@ function render() {
   if (view === 'topic') {
     // one banner per dive, 🏛️ classics then 🚀 recent, in the dive's relevance order unless a column was clicked
     const seen = new Set();
-    for (const t of DIVES.filter(t => topicSel === 'all' || t.slug === topicSel)) {
+    for (const t of DIVES.filter(t => topicSel === 'all' ? !t.retired : t.slug === topicSel)) {
       const groups = [['classic', '🏛️ Classics'], ['recent', '🚀 Recent SOTA']].map(([role, label]) => {
         let ps = t.papers.filter(x => x.role === role).map(x => BY_DOI[x.doi]).filter(p => p && matches(p));
         if (userSorted) ps = ps.slice().sort(cmp);
@@ -892,7 +906,7 @@ function render() {
       });
       const k = groups.reduce((s, [, ps]) => s + ps.length, 0);
       groups.forEach(([, ps]) => ps.forEach(p => seen.add(p.doi)));
-      html += `<tr class="banner"><td colspan="8">🔎 Topic Dive: “${esc(t.query)}” (${t.date}) <span class="muted">· ${k} of ${t.papers.length} shown</span>` +
+      html += `<tr class="banner"><td colspan="8">${t.retired ? '🏺 Antique Dive' : '🔎 Topic Dive'}: “${esc(t.query)}” (${t.date}) <span class="muted">· ${k} of ${t.papers.length} shown</span>` +
         (t.href ? ` · <a href="${t.href}" target="_blank">📄 Open Topic Report</a>` : '') + '</td></tr>';
       for (const [label, ps] of groups)
         if (ps.length) html += `<tr class="subbanner"><td colspan="8">${label} (${ps.length})</td></tr>` + ps.map(rowHtml).join('');
@@ -927,9 +941,11 @@ function rowHtml(p) {
     const tagList = [p.pin && [p.pin, `<span class="tag">${p.pin}</span>`], p.catchup && ['⏪ catch-up', '<span class="tag">⏪ catch-up</span>'],
       p.beyond && ['🌍 Beyond', '<span class="tag">🌍 Beyond</span>'], p.lineage && ['📈 Ext.', '<span class="tag">📈 Ext.</span>'],
       p.week && [p.week, `<span class="tag">${p.week}</span>`],
+      p.antique && ['🏺 ' + p.antique, `<span class="tag antique" title="${escA('Retired pillar: ' + ((ANT_BY_KEY[p.antique] || {}).name || p.antique) + (ANT_BY_KEY[p.antique] ? ' (retired ' + ANT_BY_KEY[p.antique].retired_at + ')' : ''))}">🏺 ${esc(p.antique)}</span>`],
       ...p.topics.flatMap(t => { const d = DIVE[t.slug]; if (!d) return [];
         const role = t.role === 'classic' ? '🏛️ Classic' : '🚀 Recent';
-        return [['🔎 ' + d.short, `<span class="tag tlink" title="${escA(d.query + ' (' + d.date + ')')}" onclick="event.stopPropagation();showTopic('${t.slug}')">🔎 ${esc(d.short)}</span>`],
+        const ic = d.retired ? '🏺' : '🔎';  // v3.0.8: a retired dive keeps its badge, as an antique
+        return [[ic + ' ' + d.short, `<span class="tag tlink${d.retired ? ' antique' : ''}" title="${escA(d.query + ' (' + d.date + ')' + (d.retired ? ' · retired dive' : ''))}" onclick="event.stopPropagation();showTopic('${t.slug}')">${ic} ${esc(d.short)}</span>`],
                 [role, `<span class="tag">${role}</span>`]]; })].filter(Boolean);
     // tags collapse into one "+N tags" pill (hover lists them, click expands this row) unless 🏷️ Tags is on
     const tags = !tagList.length ? '' : (tagsOn || tagOpen.has(p.doi)) ? tagList.map(t => t[1]).join('') :
@@ -992,6 +1008,8 @@ def write_dashboard(store, cfg, path, peers=()):
             "notes": {r["doi"]: r["note"] for r in recs if r["note"]},
             "pillars": [{"k": f"p{i}", "n": i, "short": catalog.pillar_short(i, n), "name": f"Pillar {i}: {n}"}  # tier 2 of 📅 Weekly Brief
                         for i, n in enumerate(cfg.get("pillars") or [], 1)],
+            "antiques": [{"k": f"ant{i}", "key": k, **v} for i, (k, v) in  # v3.0.8: 🏺 retired pillars
+                         enumerate(sorted((store.meta("retired_pillars") or {}).items(), key=lambda kv: kv[1].get("retired_at", "")), 1)],
             "weeks": weekly_reports(cfg), "sync": curation.page_sync_config(cfg),
             "welcome": not fetcher.pillars_ready(cfg), "badge": presets.badge(cfg)}
     n_store = store.db.execute("SELECT COUNT(*) FROM papers").fetchone()[0]

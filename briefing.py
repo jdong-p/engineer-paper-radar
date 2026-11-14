@@ -529,8 +529,13 @@ def main():
     ap.add_argument("--topic", help='on-demand deep-dive, e.g. --topic "sub-100nW sensor design and low-leakage techniques"')
     ap.add_argument("--max-ieee", type=int, help="IEEE calls this --topic run may use (from topic.ieee_topic_reserve)")
     ap.add_argument("--recall", help="search the whole store (incl. archived + corpus) locally: 0 API calls, 0 tokens")
-    ap.add_argument("--drop-topic", metavar="SLUG", help="remove a topic dive from 🔎 Topic Dives (meta['topics']; its papers "
-                    "and report files stay)")
+    ap.add_argument("--drop-topic", metavar="SLUG", help="delete a topic dive permanently from 🔎 Topic Dives (its papers and "
+                    "report files stay; --retire-topic keeps its 🔎 badges)")
+    ap.add_argument("--retire-topic", metavar="SLUG", help="🏺 retire a topic dive: it moves to Past / Antique Dives, its papers "
+                    "keep their badge (v3.0.8)")
+    ap.add_argument("--unretire-topic", metavar="SLUG", help="↺ restore a retired topic dive")
+    ap.add_argument("--retire-pillar", type=int, metavar="N", help="🏺 retire pillar N: its papers keep a 🏺 badge, marks, notes "
+                    "and digests; its keywords leave config.json (saved in _system/retired_pillars_config.json) (v3.0.8)")
     ap.add_argument("--sync", action="store_true", help="apply ✅/⭐/🗄️ checkbox edits, refill the Beyond-IEEE board, "
                                                          "rewrite the catalog (a claude -p call only for new board papers)")
     ap.add_argument("--rescore", action="store_true", help="re-score every paper after a keyword/pillar change (0 calls)")
@@ -596,7 +601,7 @@ def main():
         return control_center.serve_gui(cfg, a.gui or None, open_browser=not a.no_browser)
     # one radar run at a time (run_lock.py): the scheduled tasks, terminal runs and the Control Center's jobs
     # wait for each other (up to 30 min) instead of working on the store / data-repo clone together
-    recall_only = a.recall and not (a.topic or a.drop_topic or a.sync or a.rescore or a.lineage or a.add or a.seed_pillars is not None
+    recall_only = a.recall and not (a.topic or a.drop_topic or a.retire_topic or a.unretire_topic or a.retire_pillar or a.sync or a.rescore or a.lineage or a.add or a.seed_pillars is not None
                                     or any(getattr(a, f) for f in curation.ACTIONS))
     if not recall_only:
         busy = run_lock.acquire(sys.argv[1:])
@@ -661,7 +666,7 @@ def main():
     marks = [(getattr(a, f), f) for f in curation.ACTIONS if getattr(a, f)]
     for needle, action in marks:
         curation.set_mark(store, needle, action)
-    if not fetcher.pillars_ready(cfg) and not (a.topic or a.recall or a.drop_topic):
+    if not fetcher.pillars_ready(cfg) and not (a.topic or a.recall or a.drop_topic or a.retire_topic or a.unretire_topic):
         # Starter Edition: nothing to score against yet (--topic / --recall don't need pillars);
         # still (re)write the welcome dashboard
         print("\n" + fetcher.SETUP_MSG + "\n")
@@ -673,7 +678,18 @@ def main():
         fetcher.rescore_all(cfg, store)
     if a.lineage:
         print(f"Lineage: {relations.catalog_lineage(cfg, store, today)} new conference ↔ journal links")
-    if a.drop_topic:  # v3.0.6: STARTUP.html → 🔎 Topic Deep-Dive → ✕
+    if a.retire_topic or a.unretire_topic or a.retire_pillar:  # v3.0.8: 🏺 Retire as Antique (retire.py)
+        import retire
+        try:
+            if a.retire_pillar:
+                retire.retire_pillar(store, cfg, a.retire_pillar)
+                cfg = fetcher.load_config()  # the pillars and keywords just written
+            if a.retire_topic or a.unretire_topic:
+                retire.set_topic_retired(store, a.retire_topic or a.unretire_topic, bool(a.retire_topic))
+        except ValueError as e:
+            print(f"[retire] {e}", file=sys.stderr)
+            return 1
+    if a.drop_topic:  # v3.0.6: STARTUP.html → 🔎 Topic Deep-Dive → 🗑 Delete
         topics = store.meta("topics") or {}
         if topics.pop(a.drop_topic, None) is None:
             print(f"No topic dive {a.drop_topic!r} (have: {', '.join(topics) or 'none'})", file=sys.stderr)
@@ -706,7 +722,8 @@ def main():
                     _run_digests([p], DIGEST_PROMPT, prompt_ver(cfg), _digest_payload, store, cfg, print, "pinned paper")
             except Exception as e:
                 print(f"Digest failed (retried next run): {e}", file=sys.stderr)
-    if a.sync or marks or a.rescore or a.lineage or a.recall or a.topic or a.drop_topic or a.add or a.seed_pillars is not None:
+    if a.sync or marks or a.rescore or a.lineage or a.recall or a.topic or a.drop_topic or a.retire_topic \
+            or a.unretire_topic or a.retire_pillar or a.add or a.seed_pillars is not None:
         if a.dry_run:
             return 0
         board = a.sync or marks or a.rescore or a.lineage or a.add or a.seed_pillars is not None  # not --recall/--topic

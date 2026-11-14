@@ -57,7 +57,8 @@ MIGRATIONS = {"grp": "TEXT DEFAULT 'ieee'",      # 'ieee' or 'beyond' (Nature/Sc
               "catchup": "TEXT",                  # week an archive paper was pulled into as catch-up
               "pin": "TEXT",                      # 'anchor' | 'manual' (pins.py)
               "pillar": "INTEGER",                # user-chosen pillar (--add --pillar); overrides the guess
-              "user_note": "TEXT"}                # 🏷️ Tech note: the user's key technique / takeaway (v2.15)
+              "user_note": "TEXT",                # 🏷️ Tech note: the user's key technique / takeaway (v2.15)
+              "retired_pillar": "TEXT"}           # 🏺 the antique (retired) pillar it belonged to (v3.0.8, retire.py)
 
 
 # ---------- full-text search (v3.0): SQLite FTS5 over the papers table ----------
@@ -272,7 +273,7 @@ COLS = {"doi", "title", "authors", "venue", "venue_name", "published", "abstract
 
 # the personal / radar-specific part of a row: curation, scoring and this radar's weekly state
 PERSONAL_RESET = ("status='archive', week=NULL, catchup=NULL, user_mark='normal', cited=0, user_silicon=NULL, "
-                  "user_note=NULL, pin=NULL, pillar=NULL, score=0, hits=NULL")
+                  "user_note=NULL, pin=NULL, pillar=NULL, retired_pillar=NULL, score=0, hits=NULL")
 PILLAR_LINE = re.compile(r"^\s*-\s*\*\*Pillar:\*\*.*\n?", re.M)  # a digest's pillar names this radar's pillars
 FORBIDDEN = re.compile(r"(?i)[A-Z]:\\Users\\|/Users/[^/\s]+/|/home/[^/\s]+/|radar_token")  # local user paths, the sync token file
 # this radar's own arXiv preprints that the user has not selected or cited (left out of what it shares)
@@ -491,6 +492,8 @@ def peer_overlay(store, peer_id, pillars, pillar_of, share_notes=True, skip_arxi
             r["user_silicon"] = p["user_silicon"]
         if share_notes and p.get("user_note"):
             r["user_note"] = p["user_note"]
+        if p.get("retired_pillar"):  # v3.0.8: 🏺 the antique pillar it belonged to
+            r["retired_pillar"] = p["retired_pillar"]
         if p.get("grp") == "beyond":
             r["beyond"] = 1
         rows[p["doi"]] = r

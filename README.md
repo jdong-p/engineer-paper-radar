@@ -842,6 +842,22 @@ are); ✅ Create Pillar & Seed Papers saves it, re-scores your store and fills i
 **＋ Add Pillar**）：填写名称、几篇锚点论文和关键词，🪄 只为新方向规划关键词（不改动已有方向），\
 ✅ Create Pillar & Seed Papers 保存并为它填充首批候选论文。
 
+### Retiring a pillar or a topic dive (🏺 nothing is lost)
+*停用研究方向或专题（🏺 历史全部保留）*
+
+**🏺 Retire** (STARTUP.html, or `--retire-pillar N` / `--retire-topic <slug>`) takes a pillar or a dive out of
+active duty without deleting anything:
+- Its papers keep a 🏺 badge with all their marks, ⭐, 🏷️ notes and digests. Browse them anytime in the
+  dashboard's **🏺 Antiques ▾** (📅 Weekly Brief) or **🏺 Past / Antique Dives ▾** (🔎 Topic Dives).
+- A retired pillar's unreviewed candidates go back to the corpus. Its keywords leave `config.json` (a copy is
+  kept in `output/_system/retired_pillars_config.json`), and the pillars after it move up one number.
+- A pillar you add later with the same number never mixes with the old papers. A retired dive comes back with
+  ↺ Restore (`--unretire-topic`).
+
+**🏺 Retire**（STARTUP.html，或 `--retire-pillar N` / `--retire-topic <slug>`）停用方向或专题，不删除任何内容：\
+论文保留 🏺 标记及全部标注、笔记和摘要，可在仪表盘的 🏺 Antiques ▾ / 🏺 Past / Antique Dives ▾ 中随时查看；\
+之后新增的同编号方向不会与旧论文混在一起。专题可用 ↺ Restore 恢复。
+
 ### Sharing and data repos from the terminal
 *在终端中共享与同步数据仓库*
 
@@ -903,6 +919,7 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `CITATION.cff` | Citation metadata (GitHub's "Cite this repository") |
 | `scorer.py`, `presets.py` | v3.0 score boosters (coupling, taste) and domain presets |
 | `keyword_planner.py` | 🪄 0-token keyword & weight planner (`--plan-keywords`, STARTUP.html Auto-Plan) |
+| `retire.py` | 🏺 Retire as Antique: pillars (`--retire-pillar`) and topic dives (`--retire-topic`), nothing lost |
 | `run_lock.py` | One run at a time: `.run.lock` and `.run.log` (not in Git)<br>运行锁 |
 | `Start_Radar_GUI.cmd`, `Start_Radar_GUI.command`, `control_center.py` | The Setup & Control Center (`output/STARTUP.html`, `--gui`)<br>控制中心 |
 | `fetcher.py`, `topic.py`, `relations.py`, `pins.py` | Collection, scoring, deep-dives, lineage, pinning |
