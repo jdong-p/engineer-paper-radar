@@ -155,7 +155,7 @@ gap:4px;min-width:230px;max-height:75vh;overflow-y:auto;box-shadow:0 8px 24px rg
 .btn.mini{padding:2px 7px;font-size:12.5px}.btn[draggable=true]{cursor:grab}
 .sibtn{padding:1px 7px;font-size:13px}.sibtn.user{border-color:var(--accent)}.sibtn sup{font-size:9px;color:var(--accent)}
 .tagpill{cursor:pointer;opacity:.75}.tagpill:hover{opacity:1}
-.topicbar{background:var(--chip)}.topicbar a.btn{text-decoration:none}.tag.tlink{cursor:pointer;color:var(--accent)}
+.topicbar{background:var(--chip)}a.btn.newdive{text-decoration:none;border-style:dashed;color:var(--muted)}.topicbar a.btn{text-decoration:none}.tag.tlink{cursor:pointer;color:var(--accent)}
 .tier3{background:var(--bg);padding-top:6px;padding-bottom:6px}.tlabel{align-self:center}.push{flex:1}
 .tag.notetag{background:var(--citebg);color:var(--fg);font-weight:600}
 .noteline{display:flex;flex-wrap:wrap;align-items:center;gap:6px}input.note{flex:1;min-width:220px;max-width:640px;
@@ -202,13 +202,33 @@ table.papers tr.empty td{display:block}
 
 JS_COMMON = r"""
 const LS = 'paper_radar_marks_v1';
+// header menus (📚 Switch Radar / Repo): the header is a horizontal scroll strip, and Safari clips even a
+// position:fixed child to it, so the open menu is moved to <body> (v3.0.6) and moved back when it closes
 document.addEventListener('toggle', e => {
   const d = e.target;
-  if (!d.matches || !d.matches('header.bar details.peers') || !d.open) return;
-  const m = d.querySelector('.menu'), r = d.querySelector('summary').getBoundingClientRect();
-  if (innerWidth > 768) { m.style.left = Math.max(8, Math.min(r.left, innerWidth - 280)) + 'px'; }
+  if (!d.matches || !d.matches('header.bar details.peers')) return;
+  const m = d._menu || (d._menu = d.querySelector('.menu'));
+  if (!m) return;
+  if (!d.open) { if (m.parentNode !== d) d.appendChild(m); return; }
+  const r = d.querySelector('summary').getBoundingClientRect();
+  document.body.appendChild(m);
+  m.classList.add('float', 'portal'); m.style.position = 'fixed'; m.style.zIndex = '100';
+  if (innerWidth > 768) { m.style.left = Math.max(8, Math.min(r.left, innerWidth - 280)) + 'px'; m.style.right = 'auto'; }
   m.style.top = (r.bottom + 4) + 'px';
 }, true);
+function closeHeadMenus(except) {
+  document.querySelectorAll('header.bar details.peers[open]').forEach(d => {
+    if (except && (d.contains(except) || (d._menu && d._menu.contains(except)))) return;
+    d.open = false;
+  });
+}
+document.addEventListener('click', e => closeHeadMenus(e.target));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeHeadMenus(); });
+addEventListener('resize', () => closeHeadMenus());
+addEventListener('DOMContentLoaded', () => {
+  const hb = document.querySelector('header.bar');
+  if (hb) hb.addEventListener('scroll', () => closeHeadMenus(), {passive: true});
+});
 const PAGE = JSON.parse(document.getElementById('radar-data').textContent);
 // the domain preset's evidence badge (presets.py, v3.0); the values stay si / sim
 const BADGE = PAGE.badge || {si_icon: '✅', sim_icon: '⚠️ sim', si: 'Silicon-Verified', sim: 'Simulation-Only', view: '🔬 Silicon-Verified Only', head: '🔬 Silicon'};
@@ -610,6 +630,7 @@ const BY_DOI = Object.fromEntries(P.map(p => [p.doi, p]));
 // dive (topicSel) · 3 = the curation stage inside either (sub)
 let view = PAGE.welcome ? 'all' : 'candidate', q = '', sortKey = 'date', sortDir = -1, topicSel = 'all', wsel = 'all',
   userSorted = false, sub = 'all';
+if (/^#topics?$/.test(location.hash)) view = 'topic';  // v3.0.6: STARTUP.html → 📊 DASHBOARD → 🔎 Topic Dives
 let menu = '';  // which 📁 folder is open: 'more' (top bar), 'submore' (tier-3 status bar) or ''
 const open = new Set(), tagOpen = new Set();
 let tagsOn = false; try { tagsOn = localStorage.getItem('paper_radar_tags') === '1'; } catch (e) {}
@@ -769,13 +790,21 @@ function tier2() {
       GROUPS.map(([k, l, t]) => b(k, l, t)).join('') + weekLink();
     return;
   }
+  // v3.0.6: ＋ New Topic Dive ↗ opens STARTUP.html's 🔎 Topic Deep-Dive card (not on a read-only peer page)
+  const newDive = PAGE.readonly ? '' : '<a class="btn newdive" href="STARTUP.html#c-topic" target="_blank" ' +
+    'title="Start a new Topic Deep-Dive or a 0-API Local Recall in the Setup & Control Center">＋ New Topic Dive ↗</a>';
+  if (view === 'topic' && !DIVES.length) {
+    el.style.display = PAGE.readonly ? 'none' : '';
+    el.innerHTML = PAGE.readonly ? '' : `<span class="muted tlabel">🔎 Topic Dives: none yet.</span>` + newDive;
+    return;
+  }
   if (view === 'topic' && DIVES.length) {
     el.style.display = '';
     const pill = (slug, label, title) => `<button class="btn ${topicSel===slug?'on':''}" title="${escA(title)}" onclick="showTopic('${slug}')">${label}</button>`;
     el.innerHTML = `<span class="muted tlabel">🔎 Topic Dives:</span>` +
       pill('all', `All dives <span class="muted count">${DIVES.length}</span>`, 'every topic dive') + DIVES.map(t =>
       pill(t.slug, `🔎 ${esc(t.short)} <span class="muted">· ${t.date} · ${t.papers.length} papers</span>`, t.query) +
-      (t.href ? `<a class="btn" href="${t.href}" target="_blank" title="${escA(t.query)}">📄 Open Topic Report</a>` : '')).join('');
+      (t.href ? `<a class="btn" href="${t.href}" target="_blank" title="${escA(t.query)}">📄 Open Topic Report</a>` : '')).join('') + newDive;
     return;
   }
   el.style.display = 'none'; el.innerHTML = '';
@@ -842,7 +871,7 @@ function render() {
   const ae = document.activeElement;
   if (ae && ae.classList && ae.classList.contains('note')) { renderLater = true; return; }
   renderLater = false;
-  document.querySelectorAll('body > .menu').forEach(e => e.remove());
+  document.querySelectorAll('body > .menu:not(.portal)').forEach(e => e.remove());
   const c = counts();
   mainBar(c);
   const tb = document.getElementById('tagsbtn'); if (tb) tb.classList.toggle('on', tagsOn);

@@ -6,8 +6,13 @@ Stage A (0 IEEE calls): parse the query into concept groups (+ an optional power
 Stage B (IEEE reserve): one boolean IEEE query (venue-filtered) + per-DOI lookups to confirm metadata and
   fill abstracts. Draws on `ieee_topic` in api_usage (topic.ieee_topic_reserve per day), separate from
   the daily collection's ieee_daily_budget, so it works even after the 07:00 run used its 50 calls.
-Stage C (one claude -p): Executive summary & evolution, Classic-vs-SOTA master table, per-paper digests;
-  the Mermaid lineage map is computed locally from OpenAlex references.
+  v3.0.6: skipped when no IEEE venue is configured or there is no IEEE_API_KEY; with the bio_med preset (or a
+  PubMed venue) one PubMed E-utilities query (the same boolean concept groups, [tiab]) joins OpenAlex / arXiv.
+Stage C (one claude -p): Executive summary & evolution, Classic-vs-SOTA master table, per-paper digests, worded
+  for the domain preset (presets.topic_prompt; ic_ece = the original prompt, digest_ver 'topic-v1'); the Mermaid
+  lineage map is computed locally from OpenAlex references.
+  v3.0.6, 0 tokens (--no-claude, no Claude CLI, or a failed call): the dive is still saved and written, with
+  ranked 🏛️ Classics / 🚀 Recent tables (evidence badge, key numbers from the abstract) instead of the synthesis.
 """
 import json
 import math
@@ -18,7 +23,10 @@ from datetime import date
 from env_guard import ensure_minisforum_env
 
 ensure_minisforum_env()
-import arxiv_source
+try:
+    import arxiv_source  # Starter Edition: arXiv preprints (config "arxiv")
+except ImportError:
+    arxiv_source = None
 import curation
 import fetcher
 import relations
@@ -180,6 +188,55 @@ def ieee_search(groups, cfg, store, budget, log):
     return out
 
 
+def ieee_active(cfg):
+    """IEEE Stage B runs only with a key and at least one IEEE venue (ieee_query, or 'IEEE' in its name)."""
+    import os
+    return bool(os.environ.get("IEEE_API_KEY", "").strip()) and any(
+        v.get("ieee_query") or "IEEE" in (v.get("name") or "") for v in cfg.get("venues") or [])
+
+
+def pubmed_active(cfg):
+    import presets
+    return presets.key(cfg) == "bio_med" or any(v.get("source") == "pubmed" for v in cfg.get("venues") or [])
+
+
+def pubmed_term(groups):
+    """The concept groups as one PubMed boolean query: (a[tiab] OR b[tiab]) AND (…); regex-only groups dropped."""
+    parts = []
+    for g in groups:
+        ts = [t for t in g if not str(t).startswith("re:")][:4]
+        if ts:
+            parts.append("(" + " OR ".join(f'"{t}"[tiab]' for t in ts) + ")")
+    return " AND ".join(parts)
+
+
+def pubmed_search(groups, cfg, log, retmax=100):
+    """v3.0.6: one esearch (sort=relevance) + one efetch over all of PubMed for the topic's concept groups."""
+    term = pubmed_term(groups)
+    if not term:
+        return {}
+    v = next((x for x in cfg.get("venues") or [] if x.get("source") == "pubmed"),
+             {"short": "PubMed", "name": "PubMed (NCBI E-utilities)", "source": "pubmed"})
+    common = {"db": "pubmed", "tool": "paper-radar-topic", **({"email": cfg["contact_email"]} if cfg.get("contact_email") else {})}
+    out = {}
+    try:
+        q = {**common, "term": term, "retmax": retmax, "sort": "relevance", "retmode": "json"}
+        ids = json.loads(fetcher._get(fetcher.EUTILS + "esearch.fcgi?" + urllib.parse.urlencode(q), cfg))["esearchresult"].get("idlist", [])
+        if ids:
+            import time
+            import xml.etree.ElementTree as ET
+            time.sleep(0.4)  # 3 requests per second without an NCBI key
+            xml = fetcher._get(fetcher.EUTILS + "efetch.fcgi?" + urllib.parse.urlencode({**common, "id": ",".join(ids), "retmode": "xml"}), cfg)
+            for a in ET.fromstring(xml).iter("PubmedArticle"):
+                p = fetcher._pubmed_record(a, v)
+                if p and p.get("doi"):
+                    out[p["doi"]] = {**p, "cited_by": 0}
+    except Exception as e:
+        log(f"  [topic/pubmed] {e}")
+    log(f"  PubMed: {len(out)} papers for {term}")
+    return out
+
+
 def select(papers, cfg):
     tc = cfg["topic"]
     y0 = tc["recent_from_year"]
@@ -269,6 +326,54 @@ def recall(query, cfg, store, log=print, top=25):
     return out
 
 
+def _key_numbers(p):
+    import catalog
+    return catalog.key_numbers(p)
+
+
+def _cell(x):
+    return str(x or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def zero_token_body(classic, recent, sel, cfg):
+    """v3.0.6: the dive without claude -p: ranked tables (evidence badge from the abstract cues, key numbers from the
+    abstract) and the cached digests of papers that already have one. Sections 1–3; the caller adds 4 (lineage)."""
+    import catalog
+    import presets
+    b = presets.badge(cfg)
+    ids = {p["doi"]: pid for _, pid, p in sel}
+    y0 = cfg["topic"]["recent_from_year"]
+
+    def table(ps):
+        if not ps:
+            return ["_None found._"]
+        rows = [f"| # | Year & Venue | Paper & Authors | {b['column']} | Key Numbers (from the abstract) | Cited | Relevance | DOI |",
+                "|---|---|---|---|---|---|---|---|"]
+        for p in ps:
+            au = p.get("authors") or []
+            who = (au[0] + (" … " + au[-1] if len(au) > 1 else "")) if au else ""
+            yr = (relations._ym(p["published"]) or 0) // 12
+            rows.append(f"| {ids[p['doi']]} | {yr} {_cell(p.get('venue'))} | {_cell(p['title'])}" + (f" — {_cell(who)}" if who else "")
+                        + f" | {catalog.silicon(p, cfg)} | {_cell(_key_numbers(p)) or 'not stated'} | {p.get('cited_by') or 0} "
+                        f"| {p.get('rel', 0)} | [{p['doi']}](https://doi.org/{p['doi']}) |")
+        return rows
+    L = ["## 1. Overview (0-token mode)", "",
+         f"_No AI synthesis (--no-claude, no Claude CLI, or the call failed): papers are ranked by local relevance, the "
+         f"{b['column']} badge ({b['si_icon']} {b['si']} · {b['sim_icon']} {b['sim']} · ❔ unclear) comes from the abstract's "
+         f"cues and the key numbers are extracted from it. Run the dive again with the Claude CLI for the executive summary, "
+         f"the master comparison table and per-paper digests._", "",
+         f"## 2. 🏛️ Foundational Classics (before {y0}, relevance × citations)", "", *table(classic), "",
+         f"## 3. 🚀 Recent SOTA ({y0}–, by relevance)", "", *table(recent), ""]
+    cached = [(pid, p) for _, pid, p in sel if p.get("digest")]
+    if cached:
+        L += ["### Cached digests (from earlier runs, 0 tokens)", ""]
+        for pid, p in cached:
+            # a recalled (🗄️ archived) paper gets its digest from _decorate, after the heading
+            L += [f"#### [{pid}] {p['title']} ({p.get('venue') or ''} {(relations._ym(p['published']) or 0) // 12})"]
+            L += ([] if p.get("user_mark") == "archived" else [p["digest"]]) + [""]
+    return "\n".join(L)
+
+
 def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
     tc = cfg["topic"]
     today = date.today()
@@ -281,14 +386,22 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
     log(f"  local store: {len(found)} relevant")
     for d, p in openalex_search(groups, cfg, log).items():
         found.setdefault(d, p)
-    if arxiv_source.enabled(cfg):  # preprints from arXiv's official API (config "arxiv")
+    if pubmed_active(cfg):  # v3.0.6: bio_med / a PubMed venue
+        for d, p in pubmed_search(groups, cfg, log).items():
+            found.setdefault(d, p)
+    if arxiv_source and arxiv_source.enabled(cfg):  # preprints from arXiv's official API (config "arxiv")
         for d, p in arxiv_source.topic_search(groups, cfg, store, log).items():
             found.setdefault(d, p)
 
-    # Stage B — IEEE reserve (skipped without IEEE_API_KEY: OpenAlex results only)
-    fetcher.ieee_notice(log)
+    # Stage B — IEEE reserve (skipped without IEEE_API_KEY or without IEEE venues: OpenAlex / PubMed results only)
+    if hasattr(fetcher, "ieee_notice"):
+        fetcher.ieee_notice(log)
     budget = min(tc["ieee_topic_reserve"], store.calls_today("ieee_topic") + (max_ieee or tc["default_max_ieee"]))
-    for d, p in ieee_search(groups, cfg, store, budget, log).items():
+    use_ieee = ieee_active(cfg)
+    if not use_ieee:
+        log("  IEEE: skipped (no IEEE_API_KEY or no IEEE venue configured)")
+        budget = 0
+    for d, p in (ieee_search(groups, cfg, store, budget, log) if use_ieee else {}).items():
         q = found.setdefault(d, p)
         for k in ("abstract", "index_terms", "article_number"):
             if p.get(k) and not q.get(k):
@@ -298,7 +411,7 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
         p["rel"] = relevance(p, groups, limit, cfg)[0]
     pre_c, pre_r = select(list(found.values()), cfg)
     for p in pre_c + pre_r:  # fill missing abstracts of the shortlist, then re-rank
-        if not p.get("abstract") and p["doi"].startswith("10.1109/"):
+        if use_ieee and not p.get("abstract") and p["doi"].startswith("10.1109/"):
             r = fetcher._ieee({"doi": p["doi"]}, cfg, store, log, api="ieee_topic", budget=budget)
             arts = (r or {}).get("articles") or []
             if arts and arts[0].get("abstract"):
@@ -327,32 +440,43 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
                     "n_classic": len(classic)}  # dois = classics, then recent (dashboard 🏛️/🚀 badges)
     store.meta("topics", topics)
 
-    # Stage C — one claude call
+    # Stage C — one claude call (worded for the domain preset), or the 0-token tables
+    import presets
+    ic = presets.key(cfg) not in presets.TOPIC
     payload = [{"id": pid, "group": g, "title": p["title"], "venue": p["venue"],
                 "year": (relations._ym(p["published"]) or 0) // 12, "authors": p.get("authors", [])[:8],
                 "citations": p.get("cited_by") or 0, "doi": p["doi"],
                 "verification_hint": fetcher.verification(p, cfg) if p.get("abstract") else "unclear",
-                "power_numbers": sorted({f"{x:g} nW" for x in _powers_nw(p.get('abstract') or '')})[:6],
+                **({"power_numbers": sorted({f"{x:g} nW" for x in _powers_nw(p.get('abstract') or '')})[:6]} if ic else
+                   {"key_numbers": _key_numbers(p)}),
                 **({"recalled": True, "cached_digest": p["digest"]} if p["doi"] in recalled and p.get("digest") else
                    {"abstract": p.get("abstract") or "(no abstract available — title only)"})} for g, pid, p in sel]
-    body = "_(--no-claude: no synthesis)_"
+    body = None
     if use_claude and sel:
         log(f"Calling claude -p for the topic synthesis ({len(sel)} papers) ...")
-        body = claude(PROMPT.format(query=query, papers=json.dumps(payload, ensure_ascii=False, indent=1)), cfg)
-        body = body[body.find("## 1."):] if "## 1." in body else body
+        try:
+            body = claude(presets.topic_prompt(PROMPT, cfg).format(query=query, papers=json.dumps(payload, ensure_ascii=False, indent=1)), cfg)
+            body = body[body.find("## 1."):] if "## 1." in body else body
+        except Exception as e:  # never lose the dive: fall back to the 0-token tables
+            log(f"  claude -p failed ({e}): writing the 0-token report instead")
+            body = None
+    if body is None:
+        body = zero_token_body(classic, recent, sel, cfg)
+    else:
         # cache each per-paper digest (where none exists) so a later recall can reuse it at 0 tokens
-        by_id = {pid: p for _, pid, p in sel}
+        by_id = {pid: p for _, pid, p in sel}  # (claude branch only)
         for pid, text in re.findall(r"^#{3,4} \[([CR]\d+)\][^\n]*\n(.*?)(?=^#{1,4} |\Z)", body, flags=re.M | re.S):
             p = by_id.get(pid)
             row = store.get(p["doi"]) if p else None
             if row and not row.get("digest") and text.strip():
-                store.update(p["doi"], {"digest": text.strip(), "digest_ver": "topic-v1"})
+                store.update(p["doi"], {"digest": text.strip(), "digest_ver": presets.topic_ver(cfg)})
     body = _decorate(body, {pid: p for _, pid, p in sel}, recalled)
     graph = mermaid(classic, recent)
     L = [f"# Topic Deep-Dive: {query}", "",
          f"*{today:%d %b %Y} · {len(classic)} foundational classics (before {tc['recent_from_year']}, ranked by relevance × "
-         f"citations) + {len(recent)} recent papers · sources: local store, OpenAlex, IEEE Xplore API "
-         f"({store.calls_today('ieee_topic')} topic calls today)*", "",
+         f"citations) + {len(recent)} recent papers · sources: local store, OpenAlex"
+         + (", PubMed" if pubmed_active(cfg) else "")
+         + (f", IEEE Xplore API ({store.calls_today('ieee_topic')} topic calls today)" if use_ieee else "") + "*", "",
          f"**Query parsed as:** {' AND '.join('(' + ' | '.join(t.split('::')[0][3:] if t.startswith('re:') else t for t in g[:4]) + ')' for g in groups)}"
          + (f" · power ≤ {limit:g} nW boosts relevance" if limit else ""), "", body, "",
          "## 4. Lineage & Citation Map", ""]
@@ -361,7 +485,7 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
     L += ["", "## Paper list", ""]
     for _, pid, p in sel:
         L += [f"- **[{pid}]**{' ♻️ [Recalled from Archive]' if p['doi'] in recalled else ''} {p['title']} — "
-              f"*{p['venue_name']}*, {p['published']} · cited {p.get('cited_by') or 0}× · "
+              f"*{p.get('venue_name') or p.get('venue') or ''}*, {p['published']} · cited {p.get('cited_by') or 0}× · "
               f"[{p['doi']}](https://doi.org/{p['doi']})",
               f"  {curation.line(p)}"]
     from pathlib import Path

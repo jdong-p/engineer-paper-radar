@@ -259,3 +259,62 @@ def verdicts(cfg):
     """(verified, simulation-only) labels a digest's Verification line may hold: the preset's, then IC's (old digests)."""
     out = [VERDICT[key(cfg)]]
     return out + ([VERDICT["ic_ece"]] if out[0] != VERDICT["ic_ece"] else [])
+
+
+# ---------- v3.0.6: preset-aware Topic Deep-Dive (topic.py Stage C) ----------
+# topic.PROMPT is the IC reference text; ic_ece keeps it byte-identical (and digest_ver 'topic-v1'), so every cached
+# IC topic digest stays valid. Another preset swaps these exact passages and tags its digests 'topic-v1+<preset>'.
+TOPIC_IC = {
+    "role": "You are a senior analog/mixed-signal IC designer",
+    "fields": "with title, venue, year, authors, citations, verification hint, extracted power numbers and abstract.",
+    "evidence": ("Measured silicon matters\nmost; mark simulation-only results with ⚠️ and never present them as state of "
+                 "the art."),
+    "columns": ("Year & Venue | Paper & Authors | Verification | Process & Area | Power | Key Leakage/Low-Power Technique | "
+                "FoM / Key Metric | DOI"),
+    "verdict": '"✅ Silicon" / "⚠️ Sim" / "❔"',
+}
+TOPIC = {
+    "bio_med": {
+        "role": "You are a senior biomedical scientist (molecular biology, physiology and translational medicine)",
+        "fields": "with title, venue, year, authors, citations, verification hint, extracted key numbers and abstract.",
+        "evidence": ("Wet-lab, in-vivo and\nclinical evidence matters most; mark in-silico-only results with ⚠️ and never "
+                     "present them as established findings."),
+        "columns": ("Year & Venue | Paper & Authors | Evidence | Model / Cohort & n | Assay / Modality | Key Method / "
+                    "Intervention | Primary Endpoint & Effect Size | DOI"),
+        "verdict": '"🧬 Wet-Lab / In-Vivo" / "💻 In-Silico" / "❔"',
+    },
+    "chem_mat": {
+        "role": "You are a senior chemist and materials scientist",
+        "fields": "with title, venue, year, authors, citations, verification hint, extracted key numbers and abstract.",
+        "evidence": ("Synthesized and\ncharacterized materials matter most; mark DFT / simulation-only results with ⚠️ and "
+                     "never present them as state of the art."),
+        "columns": ("Year & Venue | Paper & Authors | Evidence | Material / Composition | Synthesis Route | "
+                    "Characterization | Key Property (yield, conductivity, capacity, efficiency, stability) | DOI"),
+        "verdict": '"🧪 Exp. Synthesized" / "💻 DFT / Sim" / "❔"',
+    },
+    "general_eng": {
+        "role": "You are a senior robotics and control engineer",
+        "fields": "with title, venue, year, authors, citations, verification hint, extracted key numbers and abstract.",
+        "evidence": ("Results on real hardware\nmatter most; mark simulation-only results with ⚠️ and never present them as "
+                     "state of the art."),
+        "columns": ("Year & Venue | Paper & Authors | Validation | Platform | Method (controller / planner / learning) | "
+                    "Benchmark / Task | Key Metric (success rate, error, speed, efficiency) | DOI"),
+        "verdict": '"🛠️ Hardware Tested" / "⚠️ Sim" / "❔"',
+    },
+}
+
+
+def topic_prompt(prompt, cfg):
+    """topic.PROMPT for this radar's preset: unchanged for ic_ece, else each TOPIC_IC passage swapped."""
+    k = key(cfg)
+    if k not in TOPIC:
+        return prompt
+    for part, ic in TOPIC_IC.items():
+        prompt = prompt.replace(ic, TOPIC[k][part])
+    return prompt
+
+
+def topic_ver(cfg):
+    """digest_ver of the per-paper digests a topic dive caches: 'topic-v1' (IC) or 'topic-v1+<preset>'."""
+    k = key(cfg)
+    return "topic-v1" if k not in TOPIC else f"topic-v1+{k}"

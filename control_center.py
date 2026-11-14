@@ -732,11 +732,44 @@ def status(cfg):
                     "has_git": shutil.which("git") is not None,
                     "contact_email_set": bool(EMAIL_RX.match((cfg.get("contact_email") or "").strip()))},
             "data_repo": dr,
+            "topics": _topic_status(cfg),
             "taste": _taste_status(cfg, st),
             "deploy": deploy_status(cfg),
             "sharing": {"selected": st["selected"], "cited": st["cited"], "notes": st["notes"],
                         "share_curation": (cfg.get("data_repo") or {}).get("share_curation", True) is not False,
                         "share_notes": (cfg.get("data_repo") or {}).get("share_notes", True) is not False}}
+
+
+def _topic_status(cfg):
+    """v3.0.6, STARTUP.html → 🔎 Topic Deep-Dive: meta['topics'] (newest first, with report links relative to the page)
+    and the latest Local Recall pages. Read only."""
+    root, td = Path(cfg["paths"]["onedrive_root"]), Path(cfg["paths"]["topic_dir"])
+    try:
+        rel = Path(os.path.relpath(td, root)).as_posix()
+    except ValueError:
+        rel = td.name
+    out = {"dir": rel, "dives": [], "recalls": []}
+    sp = HERE / cfg["paths"]["store_file"]
+    topics = {}
+    if sp.exists():
+        c = _ro(sp)
+        try:
+            r = c.execute("SELECT value FROM meta WHERE key='topics'").fetchone()
+            topics = json.loads(r[0]) if r and r[0] else {}
+        except (sqlite3.Error, ValueError):
+            topics = {}
+        finally:
+            c.close()
+    for slug, t in sorted(topics.items(), key=lambda kv: str(kv[1].get("date") or ""), reverse=True):
+        dois, nc = t.get("dois") or [], int(t.get("n_classic") or 0)
+        f = td / f"{t.get('date')}_{slug}.html"
+        out["dives"].append({"slug": slug, "query": t.get("query") or slug, "date": t.get("date") or "", "n_classic": nc,
+                             "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:5],
+                             "href": f"{rel}/{f.name}" if f.exists() else ""})
+    if td.is_dir():
+        fs = sorted(td.glob("*_recall_*.html"), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
+        out["recalls"] = [{"name": f.stem, "href": f"{rel}/{f.name}"} for f in fs]
+    return out
 
 
 def _taste_status(cfg, st):
@@ -780,7 +813,11 @@ def deploy_status(cfg):
 
 ACTIONS = {"rescore_and_seed": "▶ Run & Update My Dashboard", "pull_data_repo": "📥 Read / Pull Shared Repos",
            "sync_data_repo": "🔄 Full Sync with My Private Repo", "daily": "🌐 Fetch New Papers Now",
-           "init_data_repo": "✨ Create / Init My Private Repo"}
+           "init_data_repo": "✨ Create / Init My Private Repo",
+           "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Topic Deep-Dive (Classics + SOTA)",
+           "drop_topic": "✕ Remove Topic Dive"}
+TOPIC_ACTIONS = ("topic_recall", "topic_dive")
+SLUG_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
 
 def plan(action, cfg, opts=None):
@@ -788,7 +825,11 @@ def plan(action, cfg, opts=None):
     Run & Update first adopts the merged ('external') papers that score ≥ min_score with the keywords just saved
     (data_repo.adopt_external), so a collaborator who read the shared corpus before setting pillars gets them."""
     adopt = [["--adopt-external"]] if (cfg.get("data_repo") or {}).get("adopt_external", True) is not False else []
-    return {"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
+    o = opts or {}
+    q = str(o.get("query") or "<your research question>")  # --topic=… / --recall=…: a query can't pose as a flag
+    return {"topic_recall": [["--recall=" + q]],
+            "topic_dive": [["--topic=" + q] + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
+            "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
             "pull_data_repo": [["--pull-data-repo"]],
             "sync_data_repo": [["--sync"], ["--sync-data-repo"]],
             "init_data_repo": [["--init-data-repo", str((opts or {}).get("spec") or "<owner/name>")]],
@@ -815,7 +856,15 @@ def python_hint():
 def commands(cfg):
     """The same actions as command lines, for the static page (copy & paste)."""
     py = python_hint()
-    return {a: [f"{py} briefing.py {' '.join(args)}".rstrip() for args in plan(a, cfg)] for a in ACTIONS}
+    return {a: [f"{py} briefing.py {' '.join(_shell_arg(x) for x in args)}".rstrip() for args in plan(a, cfg)] for a in ACTIONS}
+
+
+def _shell_arg(x):
+    """--topic=sub-100nW sensor → --topic "sub-100nW sensor" (for the copy & paste commands)."""
+    k, eq, v = x.partition("=")
+    if eq and k.startswith("--") and (" " in v or "<" in v):
+        return f'{k} "{v}"'
+    return x
 
 
 class Jobs:
@@ -1033,6 +1082,13 @@ def api_post(path, req, jobs):
                 url = str(req["clone_url"]).strip()
                 if not CLONE_RX.match(url):
                     return 400, {"ok": False, "error": "not a clone URL (https://… or git@…, without a user name or token)"}
+            if action in TOPIC_ACTIONS:  # v3.0.6: 🔎 Topic Deep-Dive & Local Recall
+                qq = re.sub(r"\s+", " ", str(req.get("query") or "")).strip()
+                if not 3 <= len(qq) <= 300 or not re.search(r"[^\W\d_]{2}", qq):
+                    return 400, {"ok": False, "error": "type a topic or research question (3–300 characters)"}
+                req["query"], req["zero"] = qq, bool(req.get("zero"))
+            if action == "drop_topic" and not SLUG_RX.match(str(req.get("slug") or "")):
+                return 400, {"ok": False, "error": "unknown topic dive"}
             _, changed = _save(req)
             if action == "init_data_repo":
                 import data_repo
@@ -1041,7 +1097,7 @@ def api_post(path, req, jobs):
                     data_repo.repo_url(spec)
                 except ValueError as e:
                     return 400, {"ok": False, "error": str(e)}
-            job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec")})
+            job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug")})
             return 200, {"ok": True, "changed": changed, "job": job}
     except ValueError as e:
         return 400, {"ok": False, "error": str(e)}
@@ -1093,7 +1149,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.4</span></h1>
+<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.6</span></h1>
 <a class="btn" href="DASHBOARD.html">📊 Open Dashboard ↗</a>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
@@ -1104,6 +1160,7 @@ def render(data):
 <section class="card" id="c-status"></section>
 <section class="card" id="c-run"></section>
 <section class="card" id="c-console" hidden></section>
+<section class="card" id="c-topic"></section>
 <section class="card" id="c-preset"></section>
 <section class="card" id="c-plan"></section>
 <section class="card" id="c-themes"></section>
@@ -1166,6 +1223,7 @@ background:var(--bg);border-top:1px solid var(--line)}
 .w5{background:#c0392b}.w4{background:#d35400}.w3{background:#a67c00}.w2{background:#2e86c1}.w1{background:#7f8c8d}
 input.wsel{color:#fff;font-weight:700;border:0}.legendbox{border:1px solid var(--line);border-radius:10px;padding:4px 12px 2px;margin:6px 0 10px}
 table.legend td{padding:3px 8px;vertical-align:top}.planrow input.pname{flex:0 1 300px}.planrow input.seeds{flex:1;min-width:220px}
+.topictab td{padding:4px 6px;vertical-align:top}.nowrap{white-space:nowrap}.topicres{margin:6px 0;padding:6px 8px;border-left:3px solid var(--ok);background:var(--chip);border-radius:6px}
 .mbox.wide{max-width:1000px}.planbody{max-height:64vh;overflow:auto}.plantab td{padding:3px 6px;vertical-align:top}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px}
 .modal[hidden]{display:none}.mbox{background:var(--card);color:var(--fg);border-radius:14px;max-width:620px;width:100%;padding:18px 20px;
@@ -1340,7 +1398,10 @@ const RUN_TIPS = {
   daily: 'One collection pass now (IEEE / Crossref / OpenAlex) and this week\'s report' + (ST.env.has_claude ? ' with digests (claude -p).' : ' (--no-claude: no Claude CLI found).') + ' On the report day it also finalizes the week.',
   pull_data_repo: 'Read-only: fetch origin/main of ic-paper-radar-data, import every peer overlay, merge new/enriched papers into your store, adopt the external ones ≥ min_score, rebuild the dashboards. Nothing is pushed.',
   sync_data_repo: '--sync (offline Save-Marks files) then --sync-data-repo: pull, merge, export the clean union, write peers/<you>.json and push a real gain to your private data repo; then read the shared repos.',
-  init_data_repo: '--init-data-repo: create (gh) or clone your private repo into paths.data_repo_dir, write the protocol files, your clean corpus and your overlay, push main, and set data_repo.remote_url.'};
+  init_data_repo: '--init-data-repo: create (gh) or clone your private repo into paths.data_repo_dir, write the protocol files, your clean corpus and your overlay, push main, and set data_repo.remote_url.',
+  topic_recall: '--recall: search the whole local store (archived papers and the corpus included) for this topic. 0 API calls, 0 tokens; writes Topic_Dives/<date>_recall_<topic>.html.',
+  topic_dive: '--topic: local store + OpenAlex (+ IEEE reserve / PubMed), 6 classics + 8 recent papers, Claude synthesis (or 0-token tables), lineage map, and the dashboard\'s 🔎 Topic Dives.',
+  drop_topic: '--drop-topic: remove a dive from 🔎 Topic Dives.'};
 function runBtn(a, extra, primary) {
   return h('button', {class: 'btn' + (primary ? ' primary' : ''), title: RUN_TIPS[a], 'data-run': a,
     onclick: () => run(a, extra)}, D.actions[a]);
@@ -1510,6 +1571,86 @@ function renderThemes() {
       oninput: e => { S.min_score = Number(e.target.value); changed(); }})), h('span', {class: 'muted small'}, 'papers below this score never become candidates (default 5).')));
   renderPillarCounts();
   renderPlan();
+}
+
+// ---------- 🔎 Topic Deep-Dive & Local Recall (v3.0.6, topic.py) ----------
+let TQ = (() => { try { return localStorage.getItem('paper_radar_topic_q') || ''; } catch (e) { return ''; } })(), TZERO = false, TLAST = null;
+const topicSlug = q => q.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+const pyCmd = () => ((D.commands.daily || [])[0] || 'python briefing.py').split(' briefing.py')[0];
+function topicStatic(lines) {
+  const isWin = /Win/.test(navigator.platform || navigator.userAgent);
+  showConsole('Run this in a terminal', null, [h('p', {class: 'small'}, 'This page was opened as a file: start ',
+    h('b', {}, STARTER ? (isWin ? 'Start_Radar_GUI.cmd' : 'Start_Radar_GUI.command') : 'radar_sync_server.py'),
+    ' for one-click runs, or run in the radar folder:'), cmdRow(isWin ? `cd /d "${D.here}"` : `cd "${D.here}"`), lines.map(cmdRow)]);
+}
+function topicRun(a) {
+  const q = (TQ || '').replace(/\s+/g, ' ').trim();
+  if (q.length < 3) return alert('Type a topic or research question first.');
+  const zero = TZERO || !ST.env.has_claude;
+  TLAST = {a, q, slug: topicSlug(q)};
+  if (!API) return topicStatic([`${pyCmd()} briefing.py ${a === 'topic_recall' ? '--recall' : '--topic'} "${q.replace(/"/g, "'")}"` +
+                                (a === 'topic_dive' && zero ? ' --no-claude' : '')]);
+  run(a, {query: q, zero});
+}
+function dropTopic(t) {
+  if (!API) return topicStatic([`${pyCmd()} briefing.py --drop-topic ${t.slug}`]);
+  if (!confirm(`Remove the topic dive “${t.query}” (${t.date}) from 🔎 Topic Dives? Its papers and report files stay.`)) return;
+  run('drop_topic', {slug: t.slug});
+}
+function seedWords(q) {
+  return q.split(/[,;]|\b(?:and|focusing on|focused on|with|for|in|of|on|using|via|towards?)\b/i)
+    .map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 2).join(', ');
+}
+function seedFromDive(t) {  // Starter Edition: a new pillar, pre-filled for 🪄 Quick Keyword Setup
+  if (KW.pillars.length >= D.max_pillars) return alert(`You already have ${D.max_pillars} pillars: remove one first.`);
+  const name = t.query.length > 48 ? t.query.slice(0, 47).replace(/\s+\S*$/, '') + '…' : t.query;
+  const p = {name: name.charAt(0).toUpperCase() + name.slice(1), short: '', marker: null, kws: []};
+  KW.pillars.push(p);
+  setSeeds(p, KW.pillars.length - 1, seedWords(t.query));
+  let n = 0;
+  for (const d of t.classics.slice(0, 3)) if (!S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) { S.anchors.push(d); n++; }
+  changed(); renderThemes(); renderPeople();
+  const el = $('#c-plan'); if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
+  toast(`New pillar P${KW.pillars.length} from the dive: seed words pre-filled, ${n} classic DOI${n === 1 ? '' : 's'} added as anchors. Review, then 🪄 Auto-Plan.`, 8000);
+}
+function renderTopic() {
+  const el = $('#c-topic'); if (!el) return;
+  const T = ST.topics || {dives: [], recalls: []}, noClaude = !ST.env.has_claude;
+  const inp = h('input', {class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
+    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} }});
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); topicRun('topic_dive'); } });
+  const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
+  zbox.checked = TZERO || noClaude; zbox.disabled = noClaude;
+  const btn = (a, primary) => h('button', {class: 'btn' + (primary ? ' primary' : ''), 'data-run': a, title: RUN_TIPS[a], onclick: () => topicRun(a)}, D.actions[a]);
+  let result = null;
+  if (TLAST && !JOB.running) {
+    const d = TLAST.a === 'topic_dive' ? T.dives.find(x => x.slug === TLAST.slug) : null;
+    const rc = TLAST.a === 'topic_recall' ? T.recalls.find(x => x.name.endsWith('_recall_' + TLAST.slug)) : null;
+    const href = d ? d.href : rc ? rc.href : '';
+    result = h('div', {class: 'row topicres'}, h('span', {class: 'small'}, `Latest: “${TLAST.q}”`),
+      href ? h('a', {class: 'btn small primary', href, target: '_blank'}, TLAST.a === 'topic_dive' ? '📄 Open Topic Report' : '📄 Open Recall Results') : h('span', {class: 'muted small'}, '(no report page yet: see the console)'),
+      TLAST.a === 'topic_dive' ? h('a', {class: 'btn small', href: 'DASHBOARD.html#topics', target: '_blank'}, '📊 DASHBOARD → 🔎 Topic Dives') : null);
+  }
+  const dives = T.dives.length ? h('table', {class: 'mini topictab'}, h('tbody', {}, T.dives.map(t => h('tr', {},
+    h('td', {}, h('b', {}, '🔎 ' + t.query), h('div', {class: 'muted small'}, t.date)),
+    h('td', {class: 'small nowrap', title: `${t.n_classic} foundational classics + ${t.n_recent} recent SOTA papers`}, `${t.n_classic}🏛️ + ${t.n_recent}🚀`),
+    h('td', {class: 'nowrap'}, t.href ? h('a', {class: 'btn small', href: t.href, target: '_blank'}, '📄 Report') : h('span', {class: 'muted small'}, 'no report'),
+      STARTER ? h('button', {class: 'btn small', title: 'Add a pillar named after this dive and pre-fill 🪄 Quick Keyword Setup with its words and top classic DOIs (as anchors)',
+                             disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => seedFromDive(t)}, '🪄 Seed New Pillar from Dive') : null,
+      h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Remove this dive from 🔎 Topic Dives (meta topics). Its papers and report files stay.', onclick: () => dropTopic(t)}, '✕'))))))
+    : h('p', {class: 'muted small'}, 'No topic dives yet.');
+  fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
+    h('div', {class: 'row'}, inp),
+    h('div', {class: 'row'}, btn('topic_recall'), btn('topic_dive', true),
+      h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
+        zbox, noClaude ? ' 0-Token Mode (no Claude CLI found)' : ' 0-Token Mode (skip AI synthesis)')),
+    h('p', {class: 'muted small'}, '⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
+      '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ' (and PubMed for BioMed), picks 6 🏛️ classics + 8 🚀 recent papers, ' +
+      'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
+    result,
+    h('h3', {}, `Existing Topic Dives (${T.dives.length})`), dives,
+    T.recalls.length ? h('p', {class: 'small'}, 'Recent recalls: ', T.recalls.map(r => h('a', {href: r.href, target: '_blank', class: 'tag'}, r.name.replace(/^\d{4}-\d\d-\d\d_recall_/, '')))) : null);
+  lockRun();
 }
 
 // ---------- 🪄 0-token keyword & weight planner (v3.0.5, keyword_planner.py) ----------
@@ -1888,7 +2029,7 @@ function citeModal() {
      h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Close')]);
 }
 
-function renderAll() { renderDeploy(); renderStatus(); renderRun(); renderPreset(); renderPlan(); renderThemes(); renderPeople(); renderRepo(); renderSearch(); lockRun(); }
+function renderAll() { renderDeploy(); renderStatus(); renderRun(); renderTopic(); renderPreset(); renderPlan(); renderThemes(); renderPeople(); renderRepo(); renderSearch(); lockRun(); }
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 // ---------- saving ----------
@@ -1955,6 +2096,7 @@ async function connect() {
   }
 }
 buildKW(); renderAll(); baseline = snapshot(); changed(); connect();
+if (/^#c-[a-z]+$/.test(location.hash)) setTimeout(() => { const e = $(location.hash); if (e) e.scrollIntoView({block: 'start'}); }, 50);
 """
 
 

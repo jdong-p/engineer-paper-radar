@@ -300,7 +300,7 @@ v3.0 新增：FTS5 全文检索、更少的 API 调用、更智能的打分（�
    Extensions · 🗄️ Archived · ⚙️ Customize views).
 2. **Inside 📅 Weekly Brief:** All Weekly · one pill per pillar · 🌍 Beyond IEEE, plus **📄 Open Weekly
    Report** (the latest week, with a week selector once there are several).
-   **Inside 🔎 Topic Dives:** All dives · one pill per topic dive · 📄 Open Topic Report.
+   **Inside 🔎 Topic Dives:** All dives · one pill per topic dive · 📄 Open Topic Report · ＋ New Topic Dive ↗.
 3. **Curation stage, under either:** All (everything but 🗄️ Archived) · 📋 Candidate · ✅ Selected ·
    ⭐ Cite · 📁 More (🏛️ Anchors & Pinned · 🗄️ Archived). The counts follow the pill above, and the stage
    stays set while you switch pillars (e.g. 📋 Candidate across Pillar 1 → 2 → 3).
@@ -813,10 +813,22 @@ python briefing.py --topic "noise-shaping SAR ADC with passive integrator"
 python briefing.py --recall "ring oscillator"   # local store only, 0 calls
 ```
 
-`--topic` combines the local store, OpenAlex and (with a key) the IEEE API: the classics by citations plus
-recent work, written to `output/Topic_Dives/`. It works even before you configure pillars.
+`--topic` combines the local store, OpenAlex, PubMed (BioMed preset) and, with a key, the IEEE API: 6
+classics by relevance and citations plus 8 recent papers, written to `output/Topic_Dives/`. The synthesis uses
+your domain preset's wording and evidence badges. Without the Claude CLI (or with `--no-claude`) you still get
+the dive, at 0 tokens: ranked tables with key numbers from the abstracts and the citation map. It works even
+before you configure pillars. `--drop-topic <slug>` removes a dive from 🔎 Topic Dives.
 
-`--topic` 结合本地库、OpenAlex 和 IEEE API（如有 key），输出经典论文与近期进展；无需先配置方向。
+`--topic` 结合本地库、OpenAlex、PubMed（BioMed 预设）和 IEEE API（如有 key），输出 6 篇经典与 8 篇近期论文；\
+综述按你的领域预设措辞。没有 Claude CLI 时同样生成专题（0 token：排序表格、摘要关键数字和引用图）。
+
+**In the Control Center:** the **🔎 Topic Deep-Dive & Local Recall** card runs both with one click (a
+0-Token Mode toggle included), lists your dives with 📄 Report and ✕, and (🪄 Seed New Pillar from Dive) turns a
+dive into a new pillar for 🪄 Quick Keyword Setup. On the dashboard, 🔎 Topic Dives ends with
+**＋ New Topic Dive ↗**.
+
+**在控制中心：** “🔎 Topic Deep-Dive & Local Recall” 卡片一键运行专题或本地检索，管理已有专题，\
+并可用 🪄 Seed New Pillar from Dive 把专题变成新的研究方向。
 
 ### Sharing and data repos from the terminal
 *在终端中共享与同步数据仓库*
