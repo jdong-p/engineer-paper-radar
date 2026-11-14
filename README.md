@@ -16,12 +16,17 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 ## ✨ What's new in v3.0.9
 *v3.0.9 亮点*
 
-1. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8, 3.9 and newer, not only 3.11+. On an older
-   Python (or Python 2), the launchers and `python briefing.py` say which version they found and give the
-   one-line fix, `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), instead of a
-   syntax error.\
-   现在支持 Python 3.8 及以上版本。若 Python 版本过旧（或为 Python 2），启动器和 `python briefing.py` 会显示找到的版本，
-   并给出一行安装命令，而不是报语法错误。
+1. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+   **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
+   or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
+   folder (`git pull`, or download the ZIP again) and it runs.
+   On a Python older than 3.8 (or Python 2), the launchers and `python briefing.py` now say which version they
+   found and give the one-line fix, `winget install Python.Python.3.12` (Windows) or `brew install python`
+   (macOS).\
+   现在支持 Python 3.8 及以上的所有版本（已测试）。**更正：** v3.0 至 v3.0.8 写的是 “Python 3.11+”，实际上
+   `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
+   只要更新本项目（`git pull` 或重新下载 ZIP）即可。若 Python 低于 3.8（或为 Python 2），启动器和
+   `python briefing.py` 会显示找到的版本，并给出一行安装命令。
 2. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
@@ -1130,7 +1135,8 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
 | `[INFO] No IEEE_API_KEY set` | Not an error: the free OpenAlex + Crossref mode is in use |
 | `HTTP Error 429` from OpenAlex | OpenAlex's daily free budget is used up; the run continues and retries next time. Setting `contact_email` helps |
 | `python` not found / opens the Microsoft Store (Windows) | `winget install Python.Python.3.12`, or Python 3.8+ from python.org with "Add python.exe to PATH" (the launcher also tries `py`) |
-| `needs Python 3.8 or newer. Found: Python 3.7…` (or a `SyntaxError` from an old copy) | Install a current Python: `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), then open a new terminal |
+| `needs Python 3.8 or newer. Found: Python 3.7…` | Install a current Python: `winget install Python.Python.3.12` (Windows) or `brew install python` (macOS), then open a new terminal |
+| `SyntaxError` in `briefing.py` on Python 3.8–3.11 | Your copy is older than v3.0.9 (v3.0–v3.0.8 needed Python 3.12). Update it (`git pull` or a new ZIP); your Python is fine |
 | `xcrun: error` (macOS) | Install Python from python.org, or run `xcode-select --install` once |
 | No pillar pills under 📅 Weekly Brief | Click **▶ Run & Update My Dashboard** after changing pillars |
 | A 🏷️ note or click didn't reach `MASTER_TABLE.md` | 💾 Save Marks on the dashboard, then any run (or `python briefing.py --sync`) |
