@@ -823,12 +823,24 @@ before you configure pillars. `--drop-topic <slug>` removes a dive from 🔎 Top
 综述按你的领域预设措辞。没有 Claude CLI 时同样生成专题（0 token：排序表格、摘要关键数字和引用图）。
 
 **In the Control Center:** the **🔎 Topic Deep-Dive & Local Recall** card runs both with one click (a
-0-Token Mode toggle included), lists your dives with 📄 Report and ✕, and (🪄 Seed New Pillar from Dive) turns a
-dive into a new pillar for 🪄 Quick Keyword Setup. On the dashboard, 🔎 Topic Dives ends with
-**＋ New Topic Dive ↗**.
+0-Token Fast Mode toggle included) and shows, as you type, how your question is split into concept groups. It
+lists your dives with 📄 Report and ✕, and **📌 Promote Dive to Weekly Pillar** turns a dive into a permanent
+pillar. On the dashboard, 🔎 Topic Dives ends with **＋ New Topic Dive ↗**.
 
-**在控制中心：** “🔎 Topic Deep-Dive & Local Recall” 卡片一键运行专题或本地检索，管理已有专题，\
-并可用 🪄 Seed New Pillar from Dive 把专题变成新的研究方向。
+**在控制中心：** “🔎 Topic Deep-Dive & Local Recall” 卡片一键运行专题或本地检索，输入时预览检索概念组，\
+管理已有专题，并可用 📌 Promote Dive to Weekly Pillar 把专题变成长期跟踪的研究方向。
+
+### Adding a pillar later
+*之后新增研究方向*
+
+Already set up and want a new research direction? Click **＋ Add New Pillar (Guided)** in STARTUP.html (or
+**＋ Add Pillar** at the end of the dashboard's 📅 Weekly Brief bar). Give it a name, a few anchor DOIs and
+seed words; 🪄 plans keywords for the new pillar only (keywords your existing pillars own are left as they
+are); ✅ Create Pillar & Seed Papers saves it, re-scores your store and fills it with its first candidates.
+
+已经配置好、想增加新方向？在 STARTUP.html 点 **＋ Add New Pillar (Guided)**（或仪表盘 📅 Weekly Brief 末尾的\
+**＋ Add Pillar**）：填写名称、几篇锚点论文和关键词，🪄 只为新方向规划关键词（不改动已有方向），\
+✅ Create Pillar & Seed Papers 保存并为它填充首批候选论文。
 
 ### Sharing and data repos from the terminal
 *在终端中共享与同步数据仓库*

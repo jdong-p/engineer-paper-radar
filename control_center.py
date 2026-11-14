@@ -72,7 +72,14 @@ DATA_REPO_KEYS = ("peer_id", "share_curation", "share_notes", "adopt_external", 
 DEPLOYMENTS = ("local", "mesh_lan")  # 🏢 enterprise is only an easter egg in STARTUP.html
 HOST_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,99}$")
 ARXIV_KEYS = ("enabled", "share", "queries", "categories", "must_all", "exclude_any")
-STARTER_ONLY = {"pillars", "pillar_short", "arxiv"}  # the Minisforum radar's pillars are fixed in catalog.py
+STARTER_ONLY = {"arxiv"}  # v3.0.7: the Minisforum radar edits pillars too (P1–P4 fixed, P5+ added after them)
+
+
+def fixed_pillars():
+    """How many leading pillars can't be renamed / moved / removed: 0 in the Starter, catalog.FIXED_PILLARS (4) on
+    the Minisforum radar, whose en-v3 digests and prompts name them."""
+    import catalog
+    return 0 if STARTER else getattr(catalog, "FIXED_PILLARS", 0)
 
 DOI_RX = re.compile(r"^10\.\d{4,9}/[^\s\"<>]+$")
 EMAIL_RX = re.compile(r"^[^@\s\"<>]+@[^@\s\"<>]+\.[A-Za-z]{2,}$")
@@ -130,7 +137,7 @@ def editable(cfg):
     import presets
     dr, ax = cfg.get("data_repo") or {}, cfg.get("arxiv") or {}
     ks = sorted(k for k in catalog.PILLARS if k)
-    out = {"pillars": list(cfg.get("pillars") or []) if STARTER else [catalog.PILLARS[k] for k in ks],
+    out = {"pillars": list(cfg.get("pillars") or []) if STARTER else catalog.pillar_names(),
            "pillar_short": (list(cfg.get("pillar_short") or []) if STARTER
                             else [getattr(catalog, "PILLAR_SHORT", {}).get(k, "") for k in ks]),
            "positive_keywords": [[k, v] for k, v in (cfg.get("positive_keywords") or {}).items()],
@@ -230,7 +237,9 @@ def validate(upd, cfg):
         except ValueError as e:
             errs.append(str(e))
 
-    n_pillars = len(upd["pillars"]) if STARTER and isinstance(upd.get("pillars"), list) else len(cfg.get("pillars") or [])
+    import catalog
+    n_pillars = (len(upd["pillars"]) if isinstance(upd.get("pillars"), list)
+                 else len(cfg.get("pillars") or []) if STARTER else len([k for k in catalog.PILLARS if k]))
     for k, v in upd.items():
         if k in STARTER_ONLY and not STARTER:
             errs.append(f"{k}: fixed on this radar (catalog.py), not editable here")
@@ -239,6 +248,10 @@ def validate(upd, cfg):
                 names = _texts(v, "pillars", maxn=MAX_PILLARS, maxlen=120, dedupe=False)
                 if len(set(n.lower() for n in names)) < len(names):
                     raise ValueError("pillars: two pillars have the same name")
+                fx = fixed_pillars()
+                if fx and names[:fx] != list(catalog.DEFAULT_PILLARS):
+                    raise ValueError(f"pillars: pillars 1–{fx} are fixed on this radar (their cached digests name them); "
+                                     "add new pillars after them")
                 return names
             put(PATHS[k], pillars)
         elif k == "pillar_short":
@@ -764,7 +777,7 @@ def _topic_status(cfg):
         dois, nc = t.get("dois") or [], int(t.get("n_classic") or 0)
         f = td / f"{t.get('date')}_{slug}.html"
         out["dives"].append({"slug": slug, "query": t.get("query") or slug, "date": t.get("date") or "", "n_classic": nc,
-                             "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:5],
+                             "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:6],
                              "href": f"{rel}/{f.name}" if f.exists() else ""})
     if td.is_dir():
         fs = sorted(td.glob("*_recall_*.html"), key=lambda f: f.stat().st_mtime, reverse=True)[:5]
@@ -814,8 +827,8 @@ def deploy_status(cfg):
 ACTIONS = {"rescore_and_seed": "▶ Run & Update My Dashboard", "pull_data_repo": "📥 Read / Pull Shared Repos",
            "sync_data_repo": "🔄 Full Sync with My Private Repo", "daily": "🌐 Fetch New Papers Now",
            "init_data_repo": "✨ Create / Init My Private Repo",
-           "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Topic Deep-Dive (Classics + SOTA)",
-           "drop_topic": "✕ Remove Topic Dive"}
+           "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Full Topic Dive (6 Classics + 8 SOTA)",
+           "drop_topic": "✕ Remove Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers"}
 TOPIC_ACTIONS = ("topic_recall", "topic_dive")
 SLUG_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
@@ -829,7 +842,10 @@ def plan(action, cfg, opts=None):
     q = str(o.get("query") or "<your research question>")  # --topic=… / --recall=…: a query can't pose as a flag
     return {"topic_recall": [["--recall=" + q]],
             "topic_dive": [["--topic=" + q] + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
-            "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
+            "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],
+            # v3.0.7 ＋ Add New Pillar: re-score with the new keywords, file its anchors under it, seed ≥ 10 candidates
+            "add_pillar": [["--rescore", "--seed-pillars", "5", "--no-claude"]
+                           + (["--pillar", str(o.get("pillar") or "N"), "--pin-anchors", *o["anchors"]] if o.get("anchors") else [])],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
             "pull_data_repo": [["--pull-data-repo"]],
             "sync_data_repo": [["--sync"], ["--sync-data-repo"]],
             "init_data_repo": [["--init-data-repo", str((opts or {}).get("spec") or "<owner/name>")]],
@@ -1034,6 +1050,12 @@ def api_get(path, query, jobs):
     if path == "/api/search":
         mode, rows = search_store(load_cfg(), (query.get("q") or [""])[0])
         return 200, {"ok": True, "mode": mode, "results": rows}
+    if path == "/api/topic_parse":  # v3.0.7: how topic.py splits a question into concept groups (read only)
+        import topic
+        cfg = load_cfg()
+        groups, limit = topic.parse_query(str((query.get("q") or [""])[0])[:300], cfg)
+        show = [[t.split("::")[0][3:] if t.startswith("re:") else t for t in g[:4]] for g in groups]
+        return 200, {"ok": True, "groups": show, "limit_nw": limit}
     if path == "/api/config":
         cfg = load_cfg()
         return 200, {"ok": True, "editable": editable(cfg), "status": status(cfg), "job": jobs.view(10 ** 9),
@@ -1097,7 +1119,17 @@ def api_post(path, req, jobs):
                     data_repo.repo_url(spec)
                 except ValueError as e:
                     return 400, {"ok": False, "error": str(e)}
-            job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug")})
+            if action == "add_pillar":  # the new pillar must be in the config just saved
+                import catalog
+                load_cfg()
+                n = req.get("pillar")
+                if not isinstance(n, int) or isinstance(n, bool) or not (1 <= n <= MAX_PILLARS) or n not in catalog.PILLARS:
+                    return 400, {"ok": False, "error": "add_pillar: that pillar is not in config.json"}
+                an = req.get("anchors") or []
+                if not isinstance(an, list) or len(an) > 10 or not all(isinstance(d, str) and DOI_RX.match(d) for d in an):
+                    return 400, {"ok": False, "error": "add_pillar: anchors must be up to 10 DOIs"}
+            job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug",
+                                                              "pillar", "anchors")})
             return 200, {"ok": True, "changed": changed, "job": job}
     except ValueError as e:
         return 400, {"ok": False, "error": str(e)}
@@ -1127,7 +1159,7 @@ def page_data(cfg):
     sync = curation.page_sync_config(cfg)
     return {"edition": "starter" if STARTER else "radar", "editable": editable(cfg), "status": status(cfg),
             "raw": raw_config(), "paths": PATHS, "here": str(HERE), "gui_port": GUI_PORT, "data_url": DATA_URL,
-            "commands": commands(cfg), "actions": ACTIONS, "max_pillars": MAX_PILLARS,
+            "commands": commands(cfg), "actions": ACTIONS, "max_pillars": MAX_PILLARS, "fixed_pillars": fixed_pillars(),
             "presets": presets.summary(), "preset_changes": _preset_changes(cfg),
             "sync": sync if sync.get("hosts") else {}}
 
@@ -1149,7 +1181,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.6</span></h1>
+<body><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.0.7</span></h1>
 <a class="btn" href="DASHBOARD.html">📊 Open Dashboard ↗</a>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
@@ -1301,12 +1333,11 @@ function collect() {
              key1_themes: S.key1_themes, min_score: S.min_score, vip_authors: S.vip_authors, vip_boost: S.vip_boost,
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
              domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts};
-  if (STARTER) {
-    u.pillars = KW.pillars.map(p => p.name.trim());
-    const sh = KW.pillars.map(p => (p.short || '').trim());
-    while (sh.length && !sh[sh.length - 1]) sh.pop();
-    u.pillar_short = sh; u.arxiv = S.arxiv;
-  }
+  u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
+  const sh = KW.pillars.map(p => (p.short || '').trim());
+  while (sh.length && !sh[sh.length - 1]) sh.pop();
+  u.pillar_short = sh;
+  if (STARTER) u.arxiv = S.arxiv;
   return u;
 }
 let baseline = '';
@@ -1501,7 +1532,7 @@ async function poll() {
     pre.textContent += (pre.textContent ? '\n' : '') + r.lines.join('\n');
     if (atEnd) pre.scrollTop = pre.scrollHeight;
   }
-  JOB.next = r.next; JOB.running = r.running; lockRun();
+  JOB.next = r.next; JOB.running = r.running; JOB.rc = r.rc; JOB.action = r.action; lockRun();
   if (r.running) return setTimeout(poll, 1000);
   const t = $('#jobtitle'); if (t) t.textContent = (r.rc ? '❌ ' : '✅ ') + (r.label || '') + (r.rc ? ` failed (exit ${r.rc})` : ' finished');
   refresh(true);
@@ -1533,12 +1564,13 @@ function kwOpts(list) {
 }
 function renderPillarCounts() { document.querySelectorAll('[data-pcount]').forEach(e => { const k = +e.dataset.pcount; e.textContent = `${(k ? KW.pillars[k - 1].kws : KW.loose).length} keywords`; }); }
 function renderThemes() {
+  const FIX = D.fixed_pillars || 0;
   const ps = KW.pillars.map((p, i) => {
-    const head = STARTER
+    const head = i >= FIX
       ? [h('span', {class: 'num'}, `P${i + 1}`),
          h('input', {class: 'in name', value: p.name, placeholder: 'Pillar name, e.g. Precision SAR ADCs', oninput: e => { p.name = e.target.value; changed(); }}),
          h('input', {class: 'in short', value: p.short, maxlength: 24, placeholder: 'short label', title: '1–2 words for phones and the Pillar column (optional)', oninput: e => { p.short = e.target.value; changed(); }}),
-         h('button', {class: 'btn small', title: 'Move up', disabled: i === 0, onclick: () => { KW.pillars.splice(i - 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↑'),
+         h('button', {class: 'btn small', title: 'Move up', disabled: i === FIX, onclick: () => { KW.pillars.splice(i - 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↑'),
          h('button', {class: 'btn small', title: 'Move down', disabled: i === KW.pillars.length - 1, onclick: () => { KW.pillars.splice(i + 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↓'),
          h('button', {class: 'btn small danger', title: 'Remove this pillar and its keywords', onclick: () => {
            if (!confirm(`Remove pillar ${i + 1} “${p.name}” and its ${p.kws.length} keywords?`)) return;
@@ -1554,9 +1586,11 @@ function renderThemes() {
     h('h2', {}, '🎯 My Research Themes & Keywords'),
     h('p', {class: 'muted small'}, 'A paper\'s score is the sum of the weights of the keywords in its title, abstract and index terms (word match, case-insensitive unless ALL CAPS; a space or hyphen matches either; plurals match). The pillar with the most hits files it. Weights: 5 = defining term, 3–4 = strong, 1–2 = generic. ',
       h('span', {class: 'tip', title: 're:<label>::<regex> is a raw (Python) regular expression, case-sensitive unless it starts with (?i). The label is what the report shows.'}, 'Regex keywords?')),
-    STARTER ? null : h('p', {class: 'muted small'}, 'This radar\'s 4 pillar names are fixed in catalog.py; their keywords are editable here.'),
+    FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar (catalog.py; their cached digests name them); their keywords are editable. Add new pillars after them.`) : null,
+    h('div', {class: 'row'}, h('button', {class: 'btn primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
+      h('span', {class: 'muted small'}, 'name, anchors and seed words → 🪄 planned keywords for the new pillar only → its first 10 candidates')),
     ps, loose, orph,
-    STARTER ? h('div', {class: 'row'}, h('button', {class: 'btn', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
+    true ? h('div', {class: 'row'}, h('button', {class: 'btn', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
       KW.pillars.push({name: '', short: '', marker: null, kws: []}); renderThemes(); changed();
       const ins = document.querySelectorAll('.pillar .name'); if (ins.length) ins[ins.length - 1].focus(); }}, '＋ Add pillar'),
       h('span', {class: 'muted small'}, `Up to ${D.max_pillars}. Reordering renumbers the pillars; papers you pinned to a pillar number keep that number.`)) : null,
@@ -1601,23 +1635,126 @@ function seedWords(q) {
   return q.split(/[,;]|\b(?:and|focusing on|focused on|with|for|in|of|on|using|via|towards?)\b/i)
     .map(s => s.replace(/\s+/g, ' ').trim()).filter(s => s.length > 2).join(', ');
 }
-function seedFromDive(t) {  // Starter Edition: a new pillar, pre-filled for 🪄 Quick Keyword Setup
-  if (KW.pillars.length >= D.max_pillars) return alert(`You already have ${D.max_pillars} pillars: remove one first.`);
-  const name = t.query.length > 48 ? t.query.slice(0, 47).replace(/\s+\S*$/, '') + '…' : t.query;
-  const p = {name: name.charAt(0).toUpperCase() + name.slice(1), short: '', marker: null, kws: []};
-  KW.pillars.push(p);
-  setSeeds(p, KW.pillars.length - 1, seedWords(t.query));
-  let n = 0;
-  for (const d of t.classics.slice(0, 3)) if (!S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) { S.anchors.push(d); n++; }
-  changed(); renderThemes(); renderPeople();
-  const el = $('#c-plan'); if (el) el.scrollIntoView({behavior: 'smooth', block: 'start'});
-  toast(`New pillar P${KW.pillars.length} from the dive: seed words pre-filled, ${n} classic DOI${n === 1 ? '' : 's'} added as anchors. Review, then 🪄 Auto-Plan.`, 8000);
+let TPT = 0;
+function topicPreview() {  // v3.0.7: the concept groups topic.py will search for (AND of ORs), as you type
+  clearTimeout(TPT);
+  TPT = setTimeout(async () => {
+    const el = $('#topicgroups'); if (!el || !API) return;
+    const q = (TQ || '').trim(); if (q.length < 3) { el.textContent = ''; return; }
+    let r; try { r = await call('GET', '/api/topic_parse?q=' + encodeURIComponent(q)); } catch (e) { return; }
+    if (!r.ok) return;
+    el.textContent = r.groups.length ? 'Concept groups (a paper needs all but one): ' + r.groups.map(g => '(' + g.join(' | ') + ')').join(' AND ') +
+      (r.limit_nw ? ` · power ≤ ${r.limit_nw} nW boosts relevance` : '') : 'No concept words found: add a few specific terms.';
+  }, 350);
 }
+function promoteDive(t) {
+  const name = t.query.length > 60 ? t.query.slice(0, 59).replace(/\s+\S*$/, '') + '…' : t.query;
+  addPillarWizard({name: name.charAt(0).toUpperCase() + name.slice(1), seeds: seedWords(t.query), anchors: t.classics.slice(0, 6)});
+}
+
+// ---------- ＋ Add New Pillar (Guided), v3.0.7: one new pillar P<N+1>; P1..P<N> stay byte-for-byte as they are ----------
+let PLAST = null;  // {n, name} of the pillar the last wizard created (result line in 🪄 Quick Keyword Setup)
+function pillarResult() {
+  const done = !JOB.running && JOB.action === 'add_pillar';
+  return h('div', {class: 'row topicres'}, h('span', {class: 'small'}, done ? (JOB.rc ? `❌ P${PLAST.n} · ${PLAST.name}: the run failed (see the console)` : `✅ P${PLAST.n} · ${PLAST.name} is ready: re-scored and seeded`) : `⏳ P${PLAST.n} · ${PLAST.name}: re-scoring and seeding…`),
+    done && !JOB.rc ? h('a', {class: 'btn small primary', href: `DASHBOARD.html#pillar${PLAST.n}`, target: '_blank'}, `📊 Open DASHBOARD → 📅 Weekly Brief → P${PLAST.n}`) : null);
+}
+function addPillarWizard(pre) {
+  pre = pre || {};
+  if (KW.pillars.length >= D.max_pillars) return alert(`You already have ${D.max_pillars} pillars: remove one first.`);
+  const n = KW.pillars.length + 1;
+  const nameIn = h('input', {class: 'in wide', value: pre.name || '', placeholder: 'Full pillar name, e.g. SAR ADCs for Body-Sensor Networks'});
+  const shortIn = h('input', {class: 'in short', maxlength: 24, value: pre.short || '', placeholder: 'short label (optional)', title: `Shown as P${n} · <label> on phones and in the Pillar column`});
+  const anchIn = h('textarea', {class: 'in wide mono', rows: 3, placeholder: '1–6 anchor DOIs (optional), one per line: papers that define this pillar'}, (pre.anchors || []).join('\n'));
+  const seedIn = h('input', {class: 'in wide', value: pre.seeds || '', placeholder: 'a few rough seed words, comma-separated: SAR ADC, body sensor network, energy-efficient'});
+  const out = h('div', {class: 'planbody'});
+  const owned = new Map(); KW.pillars.forEach((p, i) => p.kws.forEach(([k]) => owned.set(k.toLowerCase(), i + 1))); KW.loose.forEach(([k]) => owned.set(k.toLowerCase(), 0));
+  let plan = null, picks = [], vipPicks = [], ov = null;
+  const dois = () => anchIn.value.split(/[\s,;]+/).map(cleanDoi).filter(Boolean);
+  const step3 = r => {
+    plan = r; picks = []; vipPicks = [];
+    const pl = r.pillars[0], rows = pl.keywords.map(x => {
+      const own = owned.get(x.k.toLowerCase());
+      const box = h('input', {type: 'checkbox'}); box.checked = own === undefined; box.disabled = own !== undefined;
+      const w = h('input', {class: 'in w wsel w' + x.w, type: 'number', min: -20, max: 20, step: 1, value: x.w,
+                           oninput: e => { e.target.className = 'in w wsel w' + Math.max(1, Math.min(5, Math.round(Number(e.target.value) || 1))); }});
+      if (own === undefined) picks.push({x, box, w});
+      const rx = x.k.startsWith('re:');
+      return h('tr', {class: own !== undefined ? 'muted' : ''}, h('td', {}, box), h('td', {}, w),
+        h('td', {}, rx ? h('span', {title: x.k}, h('code', {}, x.k.slice(3).split('::')[0]), h('span', {class: 'muted small'}, ' unit regex' + (x.what ? ' · ' + x.what : '')))
+                       : h('b', {}, x.k), x.kind === 'seed' ? h('span', {class: 'tag'}, 'your seed') : null,
+          own !== undefined ? h('span', {class: 'tag'}, own ? `owned by P${own}: left as it is` : 'already a keyword: left as it is') : null),
+        h('td', {class: 'small muted'}, `${x.why} · ${x.s}/${x.n_s} seed papers · ${fmt(x.b)}/${fmt(x.store)} in store`));
+    });
+    const no = r.negative_override || {};
+    const ovBox = h('input', {type: 'checkbox'}); ovBox.checked = !!no.suggest && no.merged !== no.current;
+    const ovIn = h('input', {class: 'in wide mono', value: no.merged || ''}); ov = {ovBox, ovIn};
+    const vips = (r.vip_authors || []).filter(v => !S.vip_authors.some(x => x.toLowerCase() === v.name.toLowerCase())).map(v => {
+      const box = h('input', {type: 'checkbox'}); box.checked = true; vipPicks.push({v, box});
+      return h('label', {class: 'chip', title: `${v.seed_papers} of their ${v.store} papers in your store are seed papers`}, box, ` ${v.name} `, h('span', {class: 'muted small'}, v.store ? `(${v.seed_papers}/${v.store})` : `(${v.score})`)); });
+    const missing = (r.anchors || []).filter(a => a.source === 'missing');
+    fill(out, h('h3', {}, `Step 3 · Review P${n}'s keywords, then create it`),
+      h('p', {class: 'small muted'}, `${pl.seed_papers} seed papers (${pl.anchors.length} anchors) · ${fmt(r.store_papers)} papers in your store. Keywords of P1–P${n - 1} are never changed: ones they already own are greyed out.`),
+      r.calibration ? h('p', {class: 'small ' + (r.calibration.added > 0.12 * r.store_papers ? 'warn' : 'ok')}, `📏 With these weights the new pillar adds ≈ ${fmt(r.calibration.added || 0)} papers at the threshold (your current keywords pass ${fmt(r.calibration.base || 0)}), covering ${Math.round(r.calibration.seed_cover * 100)} % of its seed papers.`) : null,
+      missing.length ? h('p', {class: 'small warn'}, `Not found (neither in your store nor on OpenAlex): ${missing.map(a => a.doi).join(', ')}`) : null,
+      pl.examples.length ? h('details', {class: 'small muted'}, h('summary', {}, 'seed papers it learned from'), h('ul', {}, pl.examples.map(t => h('li', {}, t)))) : null,
+      rows.length ? h('table', {class: 'mini plantab'}, h('tbody', {}, rows)) : h('p', {class: 'warn small'}, 'No suggestions: add seed words or anchors.'),
+      h('h3', {}, '🛡️ negative_override additions'), h('label', {class: 'row'}, ovBox, ovIn),
+      h('h3', {}, '👤 Specialist VIP authors'), vips.length ? h('div', {class: 'chips'}, vips) : h('p', {class: 'muted small'}, 'none'));
+    $('#wizgo').hidden = false;
+  };
+  const planIt = async () => {
+    const name = nameIn.value.replace(/\s+/g, ' ').trim();
+    if (!name) return alert('Step 1: give the new pillar a name.');
+    if (KW.pillars.some(p => p.name.trim().toLowerCase() === name.toLowerCase())) return alert('A pillar with that name already exists.');
+    const an = dois(), bad = an.filter(d => !/^10\.\d{4,9}\/\S+$/.test(d));
+    if (bad.length) return alert('Not a DOI: ' + bad.join(', '));
+    if (an.length > 6) return alert('At most 6 anchor DOIs here.');
+    const seeds = seedIn.value.split(/[,;\n]+/).map(x => x.trim()).filter(Boolean);
+    if (!seeds.length && !an.length) return alert('Step 1: add a few rough seed words or 1–6 anchor DOIs.');
+    if (!API) return alert('The guided flow needs the Control Center server: start Start_Radar_GUI (or open this page from the radar server).');
+    const b = $('#wizplan'); b.disabled = true; b.textContent = '🪄 Planning… (reading your store)';
+    let r;
+    try { r = await call('POST', '/api/plan_keywords', {pillars: [{name, seeds}], anchors: an}); } catch (e) { r = {ok: false, error: String(e)}; }
+    b.disabled = false; b.textContent = '🪄 Auto-Plan Keywords for This New Pillar';
+    if (!r.ok) return alert('Planner: ' + (r.error || 'failed'));
+    step3(r);
+  };
+  const create = () => {
+    if (!plan) return;
+    if (JOB.running || ACT) return toast('Another radar run is still running');
+    const name = nameIn.value.replace(/\s+/g, ' ').trim(), an = dois();
+    const kws = picks.filter(p => p.box.checked).map(p => [p.x.k, Number(p.w.value)]).filter(([, w]) => isFinite(w) && w >= -20 && w <= 20 && w !== 0);
+    if (!kws.length) return alert('Tick at least one keyword for the new pillar.');
+    KW.pillars.push({name, short: shortIn.value.trim(), marker: null, kws});
+    for (const d of an) if (!S.anchors.some(x => x.toLowerCase() === d.toLowerCase())) S.anchors.push(d);
+    for (const {v, box} of vipPicks) if (box.checked) S.vip_authors.push(v.name);
+    if (ov && ov.ovBox.checked) S.negative_override = ov.ovIn.value.trim();
+    setSeeds(KW.pillars[n - 1], n - 1, seedIn.value);
+    $('#modal').hidden = true;
+    PLAST = {n, name};
+    renderThemes(); renderPeople(); changed();
+    run('add_pillar', {pillar: n, anchors: an});
+  };
+  modal(`＋ Add New Pillar P${n} (Guided)`, h('div', {},
+    h('p', {class: 'small muted'}, `Adds one pillar after P1–P${n - 1}; their names, keywords and cached digests stay exactly as they are.`),
+    h('h3', {}, 'Step 1 · Name, anchors and seed words'),
+    h('div', {class: 'row'}, h('span', {class: 'num'}, `P${n}`), nameIn), h('div', {class: 'row'}, shortIn),
+    anchIn, seedIn,
+    h('h3', {}, 'Step 2 · Plan its keywords'),
+    h('div', {class: 'row'}, h('button', {class: 'btn primary', id: 'wizplan', onclick: planIt}, '🪄 Auto-Plan Keywords for This New Pillar'),
+      h('span', {class: 'muted small'}, 'reads your store (and OpenAlex for anchors it lacks); nothing changes yet')),
+    out), [
+    h('button', {class: 'btn primary', id: 'wizgo', hidden: true, onclick: create}, '✅ Create Pillar & Seed Papers'),
+    h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Cancel')], true);
+  const box = document.querySelector('#modal .mbox'); if (box) box.classList.add('wide');
+}
+
 function renderTopic() {
   const el = $('#c-topic'); if (!el) return;
   const T = ST.topics || {dives: [], recalls: []}, noClaude = !ST.env.has_claude;
   const inp = h('input', {class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
-    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} }});
+    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }});
   inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); topicRun('topic_dive'); } });
   const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
   zbox.checked = TZERO || noClaude; zbox.disabled = noClaude;
@@ -1635,15 +1772,16 @@ function renderTopic() {
     h('td', {}, h('b', {}, '🔎 ' + t.query), h('div', {class: 'muted small'}, t.date)),
     h('td', {class: 'small nowrap', title: `${t.n_classic} foundational classics + ${t.n_recent} recent SOTA papers`}, `${t.n_classic}🏛️ + ${t.n_recent}🚀`),
     h('td', {class: 'nowrap'}, t.href ? h('a', {class: 'btn small', href: t.href, target: '_blank'}, '📄 Report') : h('span', {class: 'muted small'}, 'no report'),
-      STARTER ? h('button', {class: 'btn small', title: 'Add a pillar named after this dive and pre-fill 🪄 Quick Keyword Setup with its words and top classic DOIs (as anchors)',
-                             disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => seedFromDive(t)}, '🪄 Seed New Pillar from Dive') : null,
+      h('button', {class: 'btn small', title: 'Open ＋ Add New Pillar, pre-filled with this dive\'s title, words and 🏛️ classic DOIs (as anchors)',
+                   disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => promoteDive(t)}, '📌 Promote Dive to Weekly Pillar'),
       h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Remove this dive from 🔎 Topic Dives (meta topics). Its papers and report files stay.', onclick: () => dropTopic(t)}, '✕'))))))
     : h('p', {class: 'muted small'}, 'No topic dives yet.');
   fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
     h('div', {class: 'row'}, inp),
     h('div', {class: 'row'}, btn('topic_recall'), btn('topic_dive', true),
       h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
-        zbox, noClaude ? ' 0-Token Mode (no Claude CLI found)' : ' 0-Token Mode (skip AI synthesis)')),
+        zbox, noClaude ? ' 0-Token Fast Mode (no Claude CLI found)' : ' 0-Token Fast Mode (--no-claude)')),
+    h('div', {class: 'muted small', id: 'topicgroups'}, API ? 'Type a question to see how it is split into concept groups.' : ''),
     h('p', {class: 'muted small'}, '⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
       '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ' (and PubMed for BioMed), picks 6 🏛️ classics + 8 🚀 recent papers, ' +
       'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
@@ -1670,7 +1808,7 @@ function renderPlan() {
     h('td', {}, h('span', {class: 'wpill w' + w}, '+' + w)), h('td', {}, h('b', {}, t), h('div', {class: 'muted small'}, note)),
     h('td', {class: 'small muted'}, ex)))));
   const pillars = KW.pillars.map((p, i) => h('div', {class: 'row planrow'}, h('span', {class: 'num'}, `P${i + 1}`),
-    STARTER ? h('input', {class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
+    i >= (D.fixed_pillars || 0) ? h('input', {class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
                           oninput: e => { const s0 = seedsOf(p, i); p.name = e.target.value; setSeeds(p, i, s0); changed(); }, onchange: () => renderThemes()})
             : h('b', {class: 'pname'}, p.name.replace(/^Pillar\s*\d+\s*[—–-]\s*/, '')),
     h('input', {class: 'in seeds', value: seedsOf(p, i), placeholder: 'rough seed words, comma-separated: ring amplifier, pipelined ADC, low power',
@@ -1691,8 +1829,11 @@ function renderPlan() {
       h('p', {class: 'muted small'}, `A paper becomes a candidate when the weights of the keywords in its title, abstract and index terms add up to ${ms}: one +5 is enough, +1 words only help in combination. ALL-CAPS keywords match case; a space or hyphen matches either; plurals match.`)),
     h('h3', {}, 'Step 1 · Name your pillars, add 2–5 anchor DOIs and a few rough seed words'),
     pillars,
-    STARTER ? h('div', {class: 'row'}, h('button', {class: 'btn small', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
-      KW.pillars.push({name: '', short: '', marker: null, kws: []}); changed(); renderThemes(); }}, '＋ Add pillar')) : null,
+    h('div', {class: 'row'}, h('button', {class: 'btn small', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
+      KW.pillars.push({name: '', short: '', marker: null, kws: []}); changed(); renderThemes(); }}, '＋ Add pillar'),
+      h('button', {class: 'btn small primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
+      h('span', {class: 'muted small'}, 'already set up? the guided flow plans keywords for one new pillar and leaves the others untouched')),
+    PLAST ? pillarResult() : null,
     h('div', {class: 'row'}, h('span', {class: 'small'}, '🏛️ Anchor DOIs (papers you love):'), doiIn, h('button', {class: 'btn small', onclick: addDoi}, '＋ Add')), anchors,
     h('h3', {}, 'Step 2 · Let the planner build the weighted keywords'),
     h('div', {class: 'row'}, h('button', {class: 'btn primary', id: 'planbtn', onclick: planKeywords}, '🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)'),
@@ -2097,6 +2238,9 @@ async function connect() {
 }
 buildKW(); renderAll(); baseline = snapshot(); changed(); connect();
 if (/^#c-[a-z]+$/.test(location.hash)) setTimeout(() => { const e = $(location.hash); if (e) e.scrollIntoView({block: 'start'}); }, 50);
+// v3.0.7: the dashboard's ＋ Add Pillar / ＋ New Topic Dive pills land in the guided flows
+if (location.hash === '#add-theme') setTimeout(() => { const e = $('#c-plan'); if (e) e.scrollIntoView({block: 'start'}); addPillarWizard(); }, 300);
+if (location.hash === '#topic-dive') setTimeout(() => { const e = $('#c-topic'); if (e) e.scrollIntoView({block: 'start'}); const i = $('#topicq'); if (i) i.focus(); }, 300);
 """
 
 

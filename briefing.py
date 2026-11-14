@@ -538,6 +538,8 @@ def main():
                                                             "(OpenAlex, 0 IEEE calls, 0 tokens)")
     ap.add_argument("--add", metavar="DOI_OR_TITLE", help="pin a paper into the active catalog (fetched if missing), "
                                                           "bypassing min_score and date windows; with --pillar / --cite")
+    ap.add_argument("--pin-anchors", nargs="+", metavar="DOI",
+                    help="with --pillar N: file these anchors (config.json anchors) under pillar N (v3.0.7)")
     ap.add_argument("--pillar", type=int, metavar="N", help="pillar number for --add (from config.json \"pillars\")")
     ap.add_argument("--export-share", nargs="?", const="", metavar="DST",
                     help="write the clean share database now (default output/paper_store_clean_share.sqlite or "
@@ -579,8 +581,8 @@ def main():
     a = ap.parse_args()
     if a.cite is True and not a.add:
         ap.error("--cite needs a DOI or title substring (or use it with --add)")
-    if a.pillar and not a.add:
-        ap.error("--pillar only works with --add")
+    if a.pillar and not (a.add or a.pin_anchors):
+        ap.error("--pillar only works with --add or --pin-anchors")
     add_cite = a.cite is True
     if add_cite:
         a.cite = None
@@ -682,8 +684,13 @@ def main():
         topic.recall(a.recall, cfg, store)
     if a.topic:
         topic.run(a.topic, cfg, store, a.max_ieee, claude, print, use_claude=not a.no_claude)
-    if a.add or a.seed_pillars is not None:
+    if a.add or a.seed_pillars is not None or a.pin_anchors:
         print(f"Anchors: {pins.sync_anchors(store, cfg)} pinned as 🏛️ Classic / Anchor")
+        if a.pin_anchors and a.pillar:  # v3.0.7: STARTUP.html → ＋ Add New Pillar files its anchors under it
+            filed = [d.lower() for d in a.pin_anchors if store.get(d.lower())]
+            for d in filed:
+                store.update(d, {"pillar": a.pillar})
+            print(f"Pillar {a.pillar}: {len(filed)} anchor(s) filed under it")
         added = a.add and pins.add(a.add, cfg, store, a.pillar, add_cite)
         if a.add and not added:
             return 1

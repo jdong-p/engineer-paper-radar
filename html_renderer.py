@@ -631,6 +631,7 @@ const BY_DOI = Object.fromEntries(P.map(p => [p.doi, p]));
 let view = PAGE.welcome ? 'all' : 'candidate', q = '', sortKey = 'date', sortDir = -1, topicSel = 'all', wsel = 'all',
   userSorted = false, sub = 'all';
 if (/^#topics?$/.test(location.hash)) view = 'topic';  // v3.0.6: STARTUP.html → 📊 DASHBOARD → 🔎 Topic Dives
+{ const m = /^#pillar(\d+)$/.exec(location.hash); if (m) { view = 'weekly'; wsel = 'p' + m[1]; } }  // v3.0.7: → P<N>
 let menu = '';  // which 📁 folder is open: 'more' (top bar), 'submore' (tier-3 status bar) or ''
 const open = new Set(), tagOpen = new Set();
 let tagsOn = false; try { tagsOn = localStorage.getItem('paper_radar_tags') === '1'; } catch (e) {}
@@ -781,17 +782,20 @@ function statusBar() {
 // tier 2: 📅 Weekly Brief → All Weekly · Pillar 1–N · 🌍 Beyond IEEE + 📄 Open Weekly Report; 🔎 Topic Dives → dives
 function tier2() {
   const el = document.getElementById('tier2');
+  // v3.0.7: ＋ Add Pillar / ＋ New Topic Dive open STARTUP.html's guided flows (not on a read-only peer page)
+  const addPillar = PAGE.readonly ? '' : '<a class="btn newdive" href="STARTUP.html#add-theme" target="_blank" ' +
+    'title="Add a new research pillar with the guided wizard: anchors + seed words → planned keywords → 10 candidates">＋ Add Pillar</a>';
   if (view === 'weekly') {
     el.style.display = '';
     const n = w => P.filter(p => inTier2(p, 'weekly', w, 'all') && stageOk(p, sub)).length;
     const b = (w, label, title) => `<button class="btn ${wsel===w?'on':''}" title="${escA(title)}" onclick="setW('${w}')">` +
       `${label} <span class="muted count">${n(w)}</span></button>`;
     el.innerHTML = `<span class="muted tlabel">📅 Weekly Brief:</span>` + b('all', 'All Weekly', 'Every pillar and 🌍 Beyond IEEE') +
-      GROUPS.map(([k, l, t]) => b(k, l, t)).join('') + weekLink();
+      GROUPS.map(([k, l, t]) => b(k, l, t)).join('') + weekLink() + addPillar;
     return;
   }
   // v3.0.6: ＋ New Topic Dive ↗ opens STARTUP.html's 🔎 Topic Deep-Dive card (not on a read-only peer page)
-  const newDive = PAGE.readonly ? '' : '<a class="btn newdive" href="STARTUP.html#c-topic" target="_blank" ' +
+  const newDive = PAGE.readonly ? '' : '<a class="btn newdive" href="STARTUP.html#topic-dive" target="_blank" ' +
     'title="Start a new Topic Deep-Dive or a 0-API Local Recall in the Setup & Control Center">＋ New Topic Dive ↗</a>';
   if (view === 'topic' && !DIVES.length) {
     el.style.display = PAGE.readonly ? 'none' : '';
