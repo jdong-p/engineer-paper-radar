@@ -6,8 +6,8 @@ request into main (a required status check in the main ruleset).
 It never imports or runs code from the pull request: files are only compiled (py_compile), parsed (json)
 and read. Checks:
   1. every tracked *.py file compiles, and still runs on Python 3.8: the 3.8 grammar (no f-string forms from
-     3.12), `from __future__ import annotations` in every module, and briefing.py (the entry point that
-     prints the "needs Python 3.8+" message) without that import or f-strings, so any Python can read it;
+     3.12), `from __future__ import annotations` in every module, and briefing.py / install.py (the entry
+     points that print the "needs Python 3.8+" message) without that import or f-strings, so any Python can read them;
   2. config.example.json (the starter template) is valid JSON and every personal setting still ships blank
      (pillars, keywords, peer_id, data_repo_dir, ...), so nobody's own config lands in the template;
   3. no config.json / config.local.json (each user's own, git-ignored), database, secret, log, output or
@@ -162,6 +162,7 @@ def check_config(repo):
 
 MIN_PY = (3, 8)
 ENTRY = "briefing.py"  # read by every Python (even 2), so an old one gets the version message, not a SyntaxError
+ENTRIES = (ENTRY, "install.py")  # install.py (v3.2.1, the one-line installer's hand-off) too
 FUTURE = "from __future__ import annotations"
 
 
@@ -200,9 +201,9 @@ def check_py38(repo):
             fail("python 3.8", "f-string form that needs Python 3.12 (a quote, backslash or comment inside {...})", f, line)
         future = any(isinstance(n, ast.ImportFrom) and n.module == "__future__" and any(a.name == "annotations" for a in n.names)
                      for n in tree.body)
-        if f == ENTRY:
+        if f in ENTRIES:
             if future or any(isinstance(n, (ast.JoinedStr, ast.NamedExpr)) for n in ast.walk(tree)):
-                fail("python 3.8", f"{ENTRY} must stay readable by any Python: no f-strings, no :=, no `{FUTURE}`", f)
+                fail("python 3.8", f"{f} must stay readable by any Python: no f-strings, no :=, no `{FUTURE}`", f)
         elif not future:
             fail("python 3.8", f"add `{FUTURE}` after the module docstring", f)
 
