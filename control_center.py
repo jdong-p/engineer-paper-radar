@@ -1133,7 +1133,9 @@ def api_get(path, query, jobs):
         show = [[t.split("::")[0][3:] if t.startswith("re:") else t for t in g[:4]] for g in groups]
         return 200, {"ok": True, "groups": show, "limit_nw": limit}
     if path == "/api/check_updates":  # v3.2.0: 🚀 new radar version / 🔔 shared repo update banners
-        return 200, {"ok": True, **check_updates(load_cfg(), force=(query.get("force") or [""])[0] == "1")}
+        cfg = load_cfg()
+        return 200, {"ok": True, **check_updates(cfg, force=(query.get("force") or [""])[0] == "1"),
+                     "pr_watch": pr_watch_status(cfg)}
     if path == "/api/config":
         cfg = load_cfg()
         return 200, {"ok": True, "editable": editable(cfg), "status": status(cfg), "job": jobs.view(10 ** 9),
@@ -1336,6 +1338,22 @@ def _meta_cache(cfg, value=None):
             c.close()
     except (sqlite3.Error, ValueError):
         return None
+
+
+PR_ATTENTION = ("needs_review", "already_fixed", "audit_failed", "merge_failed")
+
+
+def pr_watch_status(cfg):
+    """v3.2.2: open PRs that wait for the maintainer, from pr_watcher.py's state file (<output>/_system/
+    pr_watch_state.json; only the Minisforum radar writes one). Read fresh on every call; [] without the file."""
+    f = Path(cfg["paths"]["onedrive_root"]) / "_system" / "pr_watch_state.json"
+    try:
+        prs = (json.loads(f.read_text(encoding="utf-8")).get("prs") or {}).values()
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [{k: str(e.get(k) or "")[:200] for k in ("number", "title", "author", "url", "status")}
+            for e in prs if isinstance(e, dict) and e.get("status") in PR_ATTENTION
+            and str(e.get("url") or "").startswith("https://github.com/")]
 
 
 def forget_updates():
@@ -1599,7 +1617,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.1</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.2</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -2819,7 +2837,8 @@ async function checkUpdates(force) {
   UPD = r; renderUpdates();
   if (force) { const n = updCount(); toast(n ? `${n} update${n === 1 ? '' : 's'} available` : '✅ Everything is up to date' + (r.code.state === 'offline' ? ' (GitHub not reachable)' : ''), 4000); }
 }
-function updCount() { return UPD ? (UPD.code.state === 'behind' || UPD.code.state === 'zip' ? 1 : 0) + UPD.repos.filter(x => x.state === 'behind').length : 0; }
+function updCount() { return UPD ? (UPD.code.state === 'behind' || UPD.code.state === 'zip' ? 1 : 0) + UPD.repos.filter(x => x.state === 'behind').length + (UPD.pr_watch || []).length : 0; }
+const PR_WORD = {needs_review: 'needs your review', already_fixed: 'already fixed in main: close it', audit_failed: 'failed PR audit', merge_failed: 'auto-merge failed'};
 function renderUpdates() {
   const el = $('#updbanner'); if (!el) return;
   if (!UPD) return fill(el);
@@ -2832,6 +2851,10 @@ function renderUpdates() {
     out.push(h('div', {class: 'updb'}, h('b', {}, '📦 This copy came from a ZIP and cannot see new versions'),
       runBtn('self_update', null, true, '⬆️ Update Radar Now (turn it into a git clone)'),
       h('span', {class: 'muted small'}, 'config.json, your paper store and output/ are kept as they are')));
+  if ((UPD.pr_watch || []).length)  // v3.2.2: pr_watcher.py's state (Minisforum radar only)
+    out.push(h('div', {class: 'updb repo'}, h('b', {}, '🔀 Pull requests waiting for you'),
+      UPD.pr_watch.map(p => h('a', {class: 'btn pill', href: p.url, target: '_blank', rel: 'noopener'}, `PR #${p.number} · ${PR_WORD[p.status] || p.status}`)),
+      h('span', {class: 'muted small'}, UPD.pr_watch.map(p => `#${p.number} ${p.title} (${p.author})`).join(' · '))));
   if (behind.length)
     out.push(h('div', {class: 'updb repo'}, h('b', {}, `🔔 Shared Repo Update Available (${behind.map(x => x.label).join(', ')} ${behind.length === 1 ? 'has' : 'have'} new commits)`),
       runBtn('pull_data_repo', null, true, '📥 Pull Updates Now'), when));

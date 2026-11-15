@@ -308,6 +308,7 @@ async function updNotice() {
     if (r.code && r.code.state === 'behind') msgs.push(`🚀 New radar version on GitHub${r.code.behind ? ` (${r.code.behind} new commit${r.code.behind === 1 ? '' : 's'})` : ''}`);
     const rb = (r.repos || []).filter(x => x.state === 'behind').map(x => x.label);
     if (rb.length) msgs.push(`🔔 ${rb.join(', ')}: new shared commits`);
+    for (const p of (r.pr_watch || [])) msgs.push(`🔀 PR #${p.number} ${({needs_review: 'needs your review', already_fixed: 'is already fixed in main', audit_failed: 'failed PR audit', merge_failed: 'auto-merge failed'})[p.status] || p.status}`);
     if (!msgs.length) return;
     const bar = document.createElement('div');
     bar.className = 'updnote';
