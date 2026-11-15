@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.1.2)
+# 📡 Engineer Paper Radar (v3.2.0)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,10 +13,27 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.1.2
-*v3.1.2 亮点*
+## ✨ What's new in v3.2.0
+*v3.2.0 亮点*
 
-1. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+1. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
+   - `STARTUP.html` tells you when GitHub has a **new radar version** (🚀 … **⬆️ Update Radar Now**: a
+     `git pull`; a ZIP copy is turned into a Git clone and keeps your `config.json`, store and `output/`) and
+     when a teammate pushed to your **shared repo** (🔔 … **📥 Pull Updates Now**). The dashboard shows a quiet
+     one-line notice too. The check takes a few seconds at most and is cached for 15 minutes; 🔍 Check Updates
+     asks again.
+   - Type a `remote_url` in Step 2 and **Save**: the repo is cloned next to the radar folder (`../<repo name>`),
+     with no `git clone` in a terminal.
+   - **⏰ Friday Schedule** (Step 2): 07:00 pulls the shared repo and builds the Friday report locally; 12:00
+     uploads the clean corpus and your Friday-morning marks. Both times are adjustable, and **⏰ Save & Apply**
+     registers them with Windows Task Scheduler (or your crontab on macOS / Linux).
+   - **🏷️ Share my curated tags** (on by default): untick it and your ✅ / ⭐ / 🔬 / pillar overlay
+     (`peers/<id>.json`) is removed from the shared repo at the next sync, while clean papers keep syncing.\
+   STARTUP.html 会提示 GitHub 上的新版本（⬆️ 一键更新；ZIP 副本会转换为 Git 克隆并保留你的配置、数据库和
+   `output/`）以及共享仓库的新提交（📥 一键拉取）。在第 2 步填写 `remote_url` 并保存即自动克隆。**⏰ 周五计划**：
+   07:00 拉取并在本地生成周报，12:00 上传干净语料和你周五上午的标记，时间可调，**⏰ Save & Apply** 写入系统计划任务。
+   取消勾选 **🏷️ 共享标签** 后，下次同步会从共享仓库删除你的 `peers/<id>.json`，干净论文照常同步。
+2. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
@@ -25,7 +42,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    DOIs can be pasted several at once, one per line or comma-separated. The Quick Start below now starts from `git clone`.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。快速开始改为从 `git clone` 开始。
-2. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+3. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
    folder (`git pull`) and it runs.
@@ -36,21 +53,21 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
    只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-3. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+4. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-4. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+5. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-5. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+6. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-6. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+7. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
 ### The v3.0 foundation (v3.0.2)
@@ -572,10 +589,12 @@ clones it next to this folder), and **🔄 Full Sync (Pull + Push)** keeps both 
    never trade empty commits. If someone pushed in the meantime, it waits a random 2–5 s and starts again
    from step 1 (up to 3 times), so several radars syncing in the same minute take turns instead of failing.
 
-It also runs after every Friday finalize when the clone exists (`"friday_sync": false` turns that off).
-After both of you have run it, both stores hold the same union of papers.
+With the **⏰ Friday Schedule** (Step 2, v3.2.0) it also runs every Friday at `upload_time` (12:00), after the
+07:00 run has pulled and built the report locally, so the upload carries your Friday-morning marks. A Friday
+finalize itself never uploads (`"friday_sync"` is no longer read). After both of you have run it, both stores
+hold the same union of papers.
 
-运行后双方的论文库包含相同的论文并集；每周五定稿后也会自动同步。
+运行后双方的论文库包含相同的论文并集；开启 ⏰ 周五计划后，每周五 `upload_time`（12:00）自动上传。
 
 ### See each other's radar
 *查看对方的雷达*
@@ -591,8 +610,10 @@ choices and domain preset (its evidence badges); nothing you click there changes
 `output/Peers/DASHBOARD_<id>.html`，在面板顶部的 📚 菜单中即可打开。
 
 In `config.json` → `"data_repo"`: `"peer_id"` is your name in `peers/` (empty = your Git `user.name`),
-`"share_curation": false` publishes nothing, `"share_notes": false` keeps your 🏷️ notes private. Everyone
-with access to the shared repo can read what you publish.
+`"share_tags": false` (Step 2: **🏷️ Share my curated tags & peer radar**; older name `"share_curation"`) publishes
+nothing and removes your `peers/<id>.json` at the next sync (clean papers still sync), `"share_notes": false`
+keeps your 🏷️ text notes private (they are only ever shared while tags are shared). Everyone with access to the
+shared repo can read what you publish.
 
 ### What a shared copy contains
 *共享副本包含什么*
@@ -875,6 +896,14 @@ Collects the last 7 days of papers (Crossref + OpenAlex), scores them, and updat
 
 抓取最近 7 天的新论文并打分，更新本周报告，周五定稿。建议在 `"contact_email"` 填写邮箱以获得更快的 API 响应。
 
+**Easiest:** `STARTUP.html` → Step 2 → **⏰ Friday Schedule** → **⏰ Save & Apply** registers the two Friday
+runs for you (`briefing.py --friday` at `update_time`, `briefing.py --friday-upload` at `upload_time`; Windows
+tasks `IC_Paper_Radar_FridayUpdate` / `IC_Paper_Radar_FridayUpload`, or crontab lines marked
+`# paper-radar:`); the same from a terminal: `python briefing.py --apply-schedule`. If a daily task below also
+runs on Friday, the week is still finalized only once.
+
+最简单：在 STARTUP.html 第 2 步 ⏰ 周五计划中点 **⏰ Save & Apply**，自动注册两个周五任务。
+
 Run it every morning, unattended:
 
 每天自动运行（无人值守）：
@@ -1033,8 +1062,13 @@ python briefing.py --adopt-external                     # later: take the ones t
 git pull
 ```
 
-An old copy that isn't a Git folder (a ZIP download)? `git clone` the repo once (see the Quick Start), then
-move your `config.json`, `paper_store.sqlite` and `output/` into the new folder.
+Or click **⬆️ Update Radar Now** when `STARTUP.html` shows 🚀 New Radar Version Available (the same pull;
+`python briefing.py --self-update` from a terminal). It refuses, changing nothing, when your own edits to the
+code are in the way.
+
+An old copy that isn't a Git folder (a ZIP download)? **⬆️ Update Radar Now** turns it into a clone in place
+(your `config.json`, `paper_store.sqlite` and `output/` stay). Or `git clone` the repo once (see the Quick
+Start) and move those three into the new folder.
 
 Your `config.json`, store and `output/` are not in Git, so a pull never touches them. When a new version
 adds a setting to `config.example.json`, the scripts use its default until you set it in your own
@@ -1118,7 +1152,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.1.2},
+  version   = {3.2.0},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}

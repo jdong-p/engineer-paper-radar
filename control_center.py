@@ -19,6 +19,9 @@ API (JSON):
   POST /api/run           ← {"action": "rescore_and_seed" | "pull_data_repo" | "sync_data_repo" | "daily",
                              "config"?: {...}, "clone_url"?, "clone_dir"?}: saves the config, then runs briefing.py
                             in a background worker (one job at a time)
+  GET  /api/check_updates[?force=1] → {"code": {...}, "repos": [...]}: is the code repo behind its GitHub main, and
+                            do the primary data repo / read_repos have commits this clone lacks (v3.2.0; git ls-remote
+                            with a 4 s timeout, cached 15 min in memory and in the store's meta table)
   POST /api/plan_keywords ← {"pillars": [{"name", "seeds"}], "anchors": [...]} → the 0-token keyword & weight plan
                             (keyword_planner.py, read only; STARTUP.html 🪄 Auto-Plan shows it in a preview)
   GET  /api/job?since=N   → {"id", "running", "action", "rc", "lines": [...], "next"}: the job's output from line N
@@ -38,6 +41,8 @@ from __future__ import annotations
 
 import http.cookies
 import json
+import shlex
+import time
 import os
 import re
 import secrets
@@ -70,8 +75,13 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "key1_themes": ["beyond_ieee", "key1_themes"], "min_score": ["min_score"], "vip_authors": ["vip_authors"],
          "vip_boost": ["vip_boost"], "anchors": ["anchors"], "contact_email": ["contact_email"],
          "data_repo_dir": ["paths", "data_repo_dir"], "domain_preset": ["domain_preset"], "deployment": ["deployment"],
-         "sync_hosts": ["sync_server", "hosts"]}
-DATA_REPO_KEYS = ("peer_id", "share_curation", "share_notes", "adopt_external", "remote_url", "read_repos")
+         "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"]}
+DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
+# v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
+SCHEDULE_DEFAULTS = {"auto_update_local": True, "update_time": "07:00", "auto_upload_repo": True, "upload_time": "12:00"}
+TIME_RX = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+UPDATE_TTL = 15 * 60   # s: GET /api/check_updates answers from its cache for this long
+GIT_TIMEOUT = 4        # s: one git ls-remote; a slow or offline network never holds the page
 DEPLOYMENTS = ("local", "mesh_lan")  # 🏢 enterprise is only an easter egg in STARTUP.html
 HOST_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,99}$")
 ARXIV_KEYS = ("enabled", "share", "queries", "categories", "must_all", "exclude_any")
@@ -134,6 +144,24 @@ def _read_entries(cfg):
     return data_repo.read_repo_entries(cfg)
 
 
+def share_tags_on(cfg):
+    """v3.2.0 data_repo.share_tags (older name: share_curation; default true): publish peers/<peer_id>.json."""
+    dr = cfg.get("data_repo") or {}
+    return dr.get("share_tags", dr.get("share_curation", True)) is not False
+
+
+def schedule_cfg(cfg):
+    """config.json "schedule" over SCHEDULE_DEFAULTS (bad times fall back to the default)."""
+    s = cfg.get("schedule") or {}
+    out = dict(SCHEDULE_DEFAULTS)
+    for k in ("auto_update_local", "auto_upload_repo"):
+        out[k] = s.get(k, True) is not False
+    for k in ("update_time", "upload_time"):
+        if isinstance(s.get(k), str) and TIME_RX.match(s[k].strip()):
+            out[k] = s[k].strip()
+    return out
+
+
 def editable(cfg):
     """The fields STARTUP.html edits, from the effective config (Starter: config.json over the template)."""
     import catalog
@@ -150,7 +178,7 @@ def editable(cfg):
            "min_score": cfg.get("min_score", 5), "vip_authors": list(cfg.get("vip_authors") or []),
            "vip_boost": cfg.get("vip_boost", 3), "anchors": list(cfg.get("anchors") or []),
            "contact_email": cfg.get("contact_email") or "",
-           "data_repo": {"peer_id": dr.get("peer_id") or "", "share_curation": dr.get("share_curation", True) is not False,
+           "data_repo": {"peer_id": dr.get("peer_id") or "", "share_tags": share_tags_on(cfg),
                          "share_notes": dr.get("share_notes", True) is not False,
                          "adopt_external": dr.get("adopt_external", True) is not False,
                          "remote_url": dr.get("remote_url") or "",
@@ -160,7 +188,8 @@ def editable(cfg):
                                        for e in _read_entries(cfg) if e["merge"] or e["force"]}},
            "data_repo_dir": (cfg.get("paths") or {}).get("data_repo_dir") or "",
            "domain_preset": presets.key(cfg), "deployment": deployment(cfg),
-           "sync_hosts": list((cfg.get("sync_server") or {}).get("hosts") or [])}
+           "sync_hosts": list((cfg.get("sync_server") or {}).get("hosts") or []),
+           "schedule": schedule_cfg(cfg)}
     if STARTER:
         out["arxiv"] = {k: ax.get(k, False if k in ("enabled", "share") else []) for k in ARXIV_KEYS}
     return out
@@ -289,6 +318,18 @@ def validate(upd, cfg):
         elif k == "data_repo_dir":
             put(PATHS[k], lambda v=v: v.strip() if isinstance(v, str) and len(v) < 500 and not re.search(r"[\r\n\0]", v)
                 else _fail("data_repo_dir: expected a folder path"))
+        elif k == "schedule":
+            if not isinstance(v, dict):
+                errs.append("schedule: expected an object")
+                continue
+            for kk, vv in v.items():
+                if kk in ("auto_update_local", "auto_upload_repo"):
+                    put(["schedule", kk], lambda vv=vv, kk=kk: _bool(vv, f"schedule.{kk}"))
+                elif kk in ("update_time", "upload_time"):
+                    put(["schedule", kk], lambda vv=vv, kk=kk: vv.strip() if isinstance(vv, str) and TIME_RX.match(vv.strip())
+                        else _fail(f"schedule.{kk}: a time like 07:00 (24 h)"))
+                else:
+                    errs.append(f"schedule.{kk}: not editable here")
         elif k == "data_repo":
             if not isinstance(v, dict):
                 errs.append("data_repo: expected an object")
@@ -752,8 +793,10 @@ def status(cfg):
             "topics": _topic_status(cfg),
             "taste": _taste_status(cfg, st),
             "deploy": deploy_status(cfg),
+            "schedule": {"tasks": [{k: t[k] for k in ("slot", "name", "enabled", "time", "daily")} for t in schedule_tasks(cfg)],
+                         "os": "windows" if os.name == "nt" else "cron"},
             "sharing": {"selected": st["selected"], "cited": st["cited"], "notes": st["notes"],
-                        "share_curation": (cfg.get("data_repo") or {}).get("share_curation", True) is not False,
+                        "share_curation": share_tags_on(cfg), "share_tags": share_tags_on(cfg),
                         "share_notes": (cfg.get("data_repo") or {}).get("share_notes", True) is not False}}
 
 
@@ -836,7 +879,9 @@ ACTIONS = {"rescore_and_seed": "▶ Run & Update Dashboard", "pull_data_repo": "
            "init_data_repo": "✨ Create / Init My Private Repo",
            "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Full Topic Dive (6 Classics + 8 SOTA)",
            "drop_topic": "🗑 Delete Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers",
-           "retire_topic": "🏺 Retire Topic Dive", "unretire_topic": "↺ Restore Topic Dive", "retire_pillar": "🏺 Retire Pillar"}
+           "retire_topic": "🏺 Retire Topic Dive", "unretire_topic": "↺ Restore Topic Dive", "retire_pillar": "🏺 Retire Pillar",
+           "self_update": "⬆️ Update Radar Now", "clone_data_repo": "📦 Clone Shared Repo",
+           "apply_schedule": "⏰ Save & Apply Friday Schedule"}
 TOPIC_ACTIONS = ("topic_recall", "topic_dive")
 SLUG_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
@@ -858,6 +903,8 @@ def plan(action, cfg, opts=None):
             "add_pillar": [["--rescore", "--seed-pillars", "5", "--no-claude"]
                            + (["--pillar", str(o.get("pillar") or "N"), "--pin-anchors", *o["anchors"]] if o.get("anchors") else [])],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
             "pull_data_repo": [["--pull-data-repo"]],
+            "self_update": [["--self-update"]], "clone_data_repo": [["--clone-data-repo"]],
+            "apply_schedule": [["--apply-schedule"]],
             "sync_data_repo": [["--sync"], ["--sync-data-repo"]],
             "init_data_repo": [["--init-data-repo", str((opts or {}).get("spec") or "<owner/name>")]],
             "daily": [[] if has_claude(cfg) else ["--no-claude"]]}[action]
@@ -992,12 +1039,30 @@ class Jobs:
             self.log(f"[ERROR] {e}")
             rc = 1
         finally:
+            if action in ("self_update", "pull_data_repo", "sync_data_repo", "clone_data_repo", "init_data_repo"):
+                forget_updates()
+            if action == "self_update" and not rc:
+                try:  # v3.2.0: this server's own code is new too (the same module objects, re-executed)
+                    import importlib
+                    for m in ("data_repo", "html_renderer", __name__):
+                        if m in sys.modules:
+                            importlib.reload(sys.modules[m])
+                    self.log("Server code reloaded: the page shows the new version.")
+                except Exception as e:
+                    self.log(f"[WARN] the new server code loads at the next start of the Control Center: {e}")
             with self.lock:
                 self.st.update(running=False, rc=rc, finished=datetime.now().isoformat(timespec="seconds"))
             try:
                 write_startup(load_cfg(), log=lambda m: None)  # the status on the static page, after the job
             except Exception:
                 pass
+
+
+def clone_needed(cfg):
+    """v3.2.0: data_repo.remote_url is set but there is no clone at paths.data_repo_dir (or the default folder)."""
+    import data_repo
+    url = ((cfg.get("data_repo") or {}).get("remote_url") or "").strip()
+    return bool(url) and not (data_repo.repo_dir(cfg) / ".git").exists()
 
 
 def _save(req):
@@ -1067,6 +1132,8 @@ def api_get(path, query, jobs):
         groups, limit = topic.parse_query(str((query.get("q") or [""])[0])[:300], cfg)
         show = [[t.split("::")[0][3:] if t.startswith("re:") else t for t in g[:4]] for g in groups]
         return 200, {"ok": True, "groups": show, "limit_nw": limit}
+    if path == "/api/check_updates":  # v3.2.0: 🚀 new radar version / 🔔 shared repo update banners
+        return 200, {"ok": True, **check_updates(load_cfg(), force=(query.get("force") or [""])[0] == "1")}
     if path == "/api/config":
         cfg = load_cfg()
         return 200, {"ok": True, "editable": editable(cfg), "status": status(cfg), "job": jobs.view(10 ** 9),
@@ -1100,7 +1167,8 @@ def api_post(path, req, jobs):
             return keyword_planner.api(load_cfg(), req)
         if path == "/api/config":
             cfg, changed = _save(req)
-            return 200, {"ok": True, "changed": changed, "editable": editable(cfg), "status": status(cfg)}
+            return 200, {"ok": True, "changed": changed, "editable": editable(cfg), "status": status(cfg),
+                         "clone_needed": clone_needed(cfg)}
         if path == "/api/run":
             action = req.get("action")
             if action not in ACTIONS:
@@ -1156,6 +1224,336 @@ def api_post(path, req, jobs):
     return 404, {"ok": False, "error": "not found"}
 
 
+# ---------- v3.2.0: update checks, self-update, Friday schedule ----------
+GIT_ENV = dict(GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never", GIT_ASKPASS="", SSH_ASKPASS="")
+_UPD = {"t": 0.0, "res": None}
+_UPD_LOCK = threading.Lock()
+
+
+def _gitq(cwd, *args, timeout=GIT_TIMEOUT):
+    """git in `cwd` that never prompts and never hangs: (returncode, stdout); (-1, '') on a timeout or no git."""
+    try:
+        r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, env=dict(os.environ, **GIT_ENV), stdin=subprocess.DEVNULL,
+                           creationflags=NO_WINDOW)
+        return r.returncode, (r.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return -1, ""
+
+
+def code_root():
+    """The git work tree this radar's code lives in (the Starter folder, or the projects repo), else None (a ZIP)."""
+    rc, out = _gitq(HERE, "rev-parse", "--show-toplevel", timeout=10)
+    return Path(out) if rc == 0 and out else None
+
+
+def _code_remote(top):
+    rc, url = _gitq(top, "remote", "get-url", "origin", timeout=10)
+    return url if rc == 0 and url else (REPO_URL + ".git" if STARTER else "")
+
+
+def _remote_sha(cwd, remote, ref):
+    rc, out = _gitq(cwd, "ls-remote", remote, ref)
+    return out.split()[0] if rc == 0 and out else None
+
+
+def _have_ancestor(cwd, sha):
+    """True when commit `sha` is already in this clone's HEAD history (so the remote has nothing new)."""
+    return (_gitq(cwd, "cat-file", "-e", sha + "^{commit}", timeout=10)[0] == 0
+            and _gitq(cwd, "merge-base", "--is-ancestor", sha, "HEAD", timeout=10)[0] == 0)
+
+
+def _check_code():
+    top = code_root()
+    if not top:
+        return {"state": "zip" if STARTER else "unknown", "behind": 0, "remote": REPO_URL if STARTER else ""}
+    remote = _code_remote(top)
+    head = _gitq(top, "rev-parse", "HEAD", timeout=10)[1]
+    sha = _remote_sha(top, remote, "refs/heads/main") if remote else None
+    out = {"state": "current", "behind": 0, "remote": re.sub(r"\.git$", "", remote), "head": head[:7], "head_full": head}
+    if not sha:
+        return dict(out, state="offline")
+    if sha == head or _have_ancestor(top, sha):
+        return out
+    n = 0
+    if _gitq(top, "fetch", "--quiet", remote, "main", timeout=15)[0] == 0:
+        rc, cnt = _gitq(top, "rev-list", "--count", "HEAD..FETCH_HEAD", timeout=10)
+        n = int(cnt) if rc == 0 and cnt.isdigit() else 0
+        if rc == 0 and n == 0:
+            return out
+    return dict(out, state="behind", behind=n)
+
+
+def _check_repo(label, d, kind, ref):
+    """One data repo clone: has its origin got commits this clone lacks?"""
+    out = {"label": label, "kind": kind, "dir": str(d), "state": "current"}
+    if not (d / ".git").exists():
+        return dict(out, state="no_clone")
+    head = _gitq(d, "rev-parse", "HEAD", timeout=10)[1]
+    out["head_full"] = head
+    sha = _remote_sha(d, "origin", ref)
+    if not sha:
+        return dict(out, state="offline")
+    return out if sha == head or _have_ancestor(d, sha) else dict(out, state="behind")
+
+
+def _check_all(cfg):
+    import data_repo
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = []
+    url = ((cfg.get("data_repo") or {}).get("remote_url") or "").strip()
+    prim = data_repo.repo_dir(cfg)
+    if (prim / ".git").exists() or url:
+        jobs.append((data_repo.primary_label(cfg), prim, "primary", "refs/heads/main"))
+    for e in data_repo.read_repo_entries(cfg):
+        try:
+            d = data_repo.read_repo_dir(cfg, e["spec"])
+        except Exception:
+            continue
+        if Path(e["spec"]).expanduser().exists():
+            continue  # a local folder: nothing to ask a remote
+        jobs.append((data_repo.repo_label(e["spec"]), d, "read", "HEAD"))
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        code = ex.submit(_check_code)
+        repos = [ex.submit(_check_repo, *j) for j in jobs]
+        return {"code": code.result(), "repos": [f.result() for f in repos]}
+
+
+def _meta_cache(cfg, value=None):
+    """The last check in the store's meta table (key update_check), so a restarted server doesn't ask again."""
+    sp = HERE / cfg["paths"]["store_file"]
+    if not sp.exists():
+        return None
+    try:
+        c = sqlite3.connect(sp, timeout=1)
+        try:
+            if value is None:
+                r = c.execute("SELECT value FROM meta WHERE key='update_check'").fetchone()
+                return json.loads(r[0]) if r else None
+            c.execute("INSERT OR REPLACE INTO meta VALUES ('update_check', ?)", (json.dumps(value, ensure_ascii=False),))
+            c.commit()
+        finally:
+            c.close()
+    except (sqlite3.Error, ValueError):
+        return None
+
+
+def forget_updates():
+    with _UPD_LOCK:
+        _UPD.update(t=0.0, res=None)
+
+
+def _heads_moved(res):
+    """True when a clone's local HEAD is no longer the one the cached check saw (a pull, an update, a new clone
+    by any process): the cache is then stale."""
+    c = res.get("code") or {}
+    if c.get("head_full"):
+        top = code_root()
+        if not top or _gitq(top, "rev-parse", "HEAD", timeout=10)[1] != c["head_full"]:
+            return True
+    for r in res.get("repos") or []:
+        d = Path(r.get("dir") or "")
+        if r.get("state") == "no_clone":
+            if (d / ".git").exists():
+                return True
+        elif r.get("head_full") is not None and _gitq(d, "rev-parse", "HEAD", timeout=10)[1] != r["head_full"]:
+            return True
+    return False
+
+
+def check_updates(cfg, force=False):
+    """{"code": {state: current|behind|offline|zip|unknown, behind: N, remote}, "repos": [{label, kind, state}],
+    "checked": iso, "cached": bool}. Cached UPDATE_TTL seconds (memory, then meta); force=True asks again."""
+    now = time.time()
+    with _UPD_LOCK:
+        res, t = _UPD["res"], _UPD["t"]
+    if not force and not res:
+        m = _meta_cache(cfg)
+        if isinstance(m, dict) and isinstance(m.get("t"), (int, float)) and isinstance(m.get("res"), dict):
+            res, t = m["res"], m["t"]
+    if not force and res and now - t < UPDATE_TTL and not _heads_moved(res):
+        return dict(res, cached=True)
+    res = dict(_check_all(cfg), checked=datetime.now().isoformat(timespec="seconds"))
+    with _UPD_LOCK:
+        _UPD.update(t=now, res=res)
+    _meta_cache(cfg, {"t": now, "res": res})
+    return dict(res, cached=False)
+
+
+PROTECTED = ("config.json", "config.local.json", ".env", "output", "radar.log", ".run.lock", ".run.log", ".radar_token")
+
+
+def self_update(cfg, log=print):
+    """⬆️ Update Radar Now: `git pull --ff-only` in the code repo. A Starter folder that came from a ZIP (no .git)
+    becomes a clone of the public repo: git init, fetch main, then only the repo's files are checked out
+    (config.json, the paper store, output/ and other ignored files are never touched). Returns 0 / 1."""
+    def run(*args, timeout=180):
+        rc, out = _gitq(cwd, *args, timeout=timeout)
+        for line in out.splitlines()[-20:]:
+            log("  " + line)
+        return rc
+    top = code_root()
+    if top:
+        cwd, remote = top, _code_remote(top)
+        if not remote:
+            log("No origin remote: nothing to update from")
+            return 1
+        log(f"git pull --ff-only {re.sub(r'.git$', '', remote)} main in {top}")
+        if run("pull", "--ff-only", remote, "main"):
+            log("[ERROR] not updated: local changes or local commits are in the way (git status shows them). "
+                "Nothing was changed.")
+            return 1
+        log("Updated to " + _gitq(top, "log", "-1", "--format=%h %s", timeout=10)[1])
+        return 0
+    if not STARTER:
+        log("[ERROR] this radar's folder is not a git clone")
+        return 1
+    cwd = HERE
+    store_name = Path(cfg["paths"]["store_file"]).name
+    log(f"This folder has no .git (a ZIP copy): turning it into a clone of {REPO_URL}")
+    if run("init", "-q") or run("remote", "add", "origin", REPO_URL + ".git") and \
+            run("remote", "set-url", "origin", REPO_URL + ".git"):
+        return 1
+    if run("fetch", "-q", "origin", "main", timeout=600):
+        log("[ERROR] could not fetch the public repo (offline?)")
+        return 1
+    rc, names = _gitq(cwd, "ls-tree", "-r", "--name-only", "FETCH_HEAD", timeout=30)
+    keep = set(PROTECTED) | {store_name}
+    files = [n for n in names.splitlines() if n and n.split("/")[0] not in keep and not n.endswith((".sqlite", ".db"))]
+    if rc or not files:
+        log("[ERROR] the fetched tree is empty")
+        return 1
+    run("symbolic-ref", "HEAD", "refs/heads/main")
+    if run("reset", "-q", "FETCH_HEAD"):  # HEAD and index only: the working folder is untouched
+        return 1
+    for i in range(0, len(files), 40):
+        if run("checkout", "FETCH_HEAD", "--", *files[i:i + 40]):
+            return 1
+    run("branch", "--set-upstream-to=origin/main", "main")
+    log(f"Updated: {len(files)} code files from {REPO_URL} (config.json, {store_name} and output/ untouched); "
+        "from now on ⬆️ Update Radar Now is a git pull")
+    return 0
+
+
+def schedule_tasks(cfg):
+    """The OS tasks behind the two Friday slots. Minisforum radar: the existing PaperRadar_Daily (every day at
+    update_time; on Fridays it pulls first and finalizes) and PaperRadar_FridayNoonSync (Fri, upload_time).
+    Starter: IC_Paper_Radar_FridayUpdate (briefing.py --friday) and IC_Paper_Radar_FridayUpload
+    (briefing.py --friday-upload), both weekly on Friday."""
+    sc = schedule_cfg(cfg)
+    b = str(HERE / "briefing.py")
+    if STARTER:
+        up = [b, "--friday"] + ([] if has_claude(cfg) else ["--no-claude"])
+        t = [("update", "IC_Paper_Radar_FridayUpdate", False, python_exe(), up),
+             ("upload", "IC_Paper_Radar_FridayUpload", False, python_exe(), [b, "--friday-upload"])]
+    else:
+        t = [("update", "PaperRadar_Daily", True, str(HERE / "run_radar.cmd"), []),
+             ("upload", "PaperRadar_FridayNoonSync", False, str(HERE / "run_data_repo_sync.cmd"), [])]
+    key = {"update": ("auto_update_local", "update_time"), "upload": ("auto_upload_repo", "upload_time")}
+    return [{"slot": slot, "name": name, "daily": daily, "exe": exe, "args": args,
+             "enabled": sc[key[slot][0]], "time": sc[key[slot][1]]} for slot, name, daily, exe, args in t]
+
+
+def _ps_q(x):
+    return "'" + str(x).replace("'", "''") + "'"
+
+
+def _win_arg(x):
+    return f'"{x}"' if re.search(r"\s", str(x)) else str(x)
+
+
+def schtasks_script(tasks):
+    """PowerShell that creates / updates / disables the tasks (StartWhenAvailable, runs on battery). Each task in
+    its own try: one refused task (e.g. created as Administrator) is reported and the others still apply."""
+    out = ["$ErrorActionPreference = 'Stop'", "$failed = $false"]
+    for t in tasks:
+        n = _ps_q(t["name"])
+        trig = (f"New-ScheduledTaskTrigger -Daily -At {_ps_q(t['time'])}" if t["daily"]
+                else f"New-ScheduledTaskTrigger -Weekly -DaysOfWeek Friday -At {_ps_q(t['time'])}")
+        when = ("every day" if t["daily"] else "Fridays") + " at " + t["time"]
+        if t["enabled"]:
+            args = " ".join(_win_arg(a) for a in t["args"])
+            act = (f"New-ScheduledTaskAction -Execute {_ps_q(t['exe'])} -WorkingDirectory {_ps_q(HERE)}"
+                   + (f" -Argument {_ps_q(args)}" if args else ""))
+            body = (f"$t = Get-ScheduledTask -TaskName {n} -ErrorAction SilentlyContinue\n"
+                    f"$tr = {trig}\n"
+                    "$st = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries "
+                    "-DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 6)\n"
+                    f"if ($t) {{ Set-ScheduledTask -TaskName {n} -Trigger $tr -Settings $st | Out-Null; "
+                    f"Enable-ScheduledTask -TaskName {n} | Out-Null; 'updated  {t['name']}: {when}' }}\n"
+                    f"else {{ Register-ScheduledTask -TaskName {n} -Action ({act}) -Trigger $tr -Settings $st "
+                    f"-Description 'Paper Radar Friday {t['slot']} (STARTUP.html Step 2)' | Out-Null; "
+                    f"'created  {t['name']}: {when}' }}")
+        else:
+            body = (f"$t = Get-ScheduledTask -TaskName {n} -ErrorAction SilentlyContinue\n"
+                    f"if ($t) {{ Disable-ScheduledTask -TaskName {n} | Out-Null; 'disabled {t['name']}' }} "
+                    f"else {{ 'off      {t['name']} (not installed)' }}")
+        out.append(f"try {{\n{body}\n}} catch {{ $failed = $true; 'FAILED   {t['name']}: ' + $_.Exception.Message.Trim() }}")
+    out.append("if ($failed) { exit 3 }")
+    return "\n".join(out)
+
+
+CRON_MARK = "# paper-radar:"
+
+
+def cron_text(tasks, current):
+    """The new crontab: the radar's own lines (CRON_MARK) replaced, every other line kept."""
+    keep = [ln for ln in (current or "").splitlines() if CRON_MARK not in ln]
+    for t in tasks:
+        if not t["enabled"]:
+            continue
+        hh, mm = t["time"].split(":")
+        cmd = " ".join(shlex.quote(str(a)) for a in [t["exe"], *t["args"]])
+        keep.append(f"{int(mm)} {int(hh)} * * {'*' if t['daily'] else 5} cd {shlex.quote(str(HERE))} && "
+                    f"PATH=/opt/homebrew/bin:/usr/local/bin:$PATH {cmd} "
+                    f">> radar.log 2>&1 {CRON_MARK}{t['slot']}")
+    return "\n".join(keep).strip("\n") + "\n"
+
+
+def apply_schedule(cfg, log=print):
+    """⏰ Save & Apply Friday Schedule: the OS tasks to match config.json "schedule". Returns 0 / 1."""
+    tasks = schedule_tasks(cfg)
+    sc = schedule_cfg(cfg)
+    if sc["auto_update_local"] and sc["auto_upload_repo"] and sc["upload_time"] <= sc["update_time"]:
+        log(f"[WARN] upload {sc['upload_time']} is not after the local update {sc['update_time']}: "
+            "the upload then carries last week's marks")
+    if os.name == "nt":
+        try:
+            r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                                "-Command", schtasks_script(tasks)], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=120, creationflags=NO_WINDOW)
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"[ERROR] PowerShell: {e}")
+            return 1
+        for line in (r.stdout or "").splitlines():
+            if line.strip():
+                log("  " + line.rstrip())
+        if r.returncode:
+            if "denied" in (r.stdout or "").lower():
+                log("[ERROR] Windows refused to change a task that was created as Administrator. Run this once from "
+                    f"an Administrator terminal in {HERE}:  {python_hint()} briefing.py --apply-schedule")
+            else:
+                log("[ERROR] " + ((r.stderr or "").strip()[-600:] or "a task was not applied (see above)"))
+            return 1
+    else:
+        try:
+            cur = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=20)
+            new = cron_text(tasks, cur.stdout if cur.returncode == 0 else "")
+            r = subprocess.run(["crontab", "-"], input=new, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as e:
+            log(f"[ERROR] crontab: {e}")
+            return 1
+        if r.returncode:
+            log("[ERROR] crontab: " + (r.stderr or "").strip()[-400:])
+            return 1
+        for t in tasks:
+            log(f"  {'set ' if t['enabled'] else 'off '} {t['slot']}: " + (f"Fridays at {t['time']}" if t["enabled"] else "removed"))
+        if sys.platform == "darwin":
+            log("  macOS: the Mac must be awake at those times (cron skips a sleeping Mac's runs)")
+    log("Friday schedule applied.")
+    return 0
+
+
 # ---------- STARTUP.html ----------
 
 def _preset_changes(cfg):
@@ -1201,11 +1599,12 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.1.2</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.0</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
 <main class="cc">
+<div id="updbanner"></div>
 <section class="card cockpit" id="c-status"></section>
 <section class="card" id="c-console" hidden></section>
 <div class="stepbar"><h2>🧩 Setup in 4 steps</h2><span class="muted small">finished steps fold into one line; click a step to open it</span>
@@ -1215,7 +1614,7 @@ def render(data):
 <div class="sbody"><section id="c-profile"></section><section id="c-preset"></section></div></details>
 <details class="step-card" id="s2"><summary><span class="snum">2</span><span class="stitle">Step 2 · Private Shared Repo &amp; Team Sync <em>(Recommended for Teams)</em></span>
 <span class="sbadge" id="s2b"></span><span class="sarrow">▸</span><span class="ssum" id="s2s"></span></summary>
-<div class="sbody"><section id="c-repo"></section></div></details>
+<div class="sbody"><section id="c-repo"></section><section id="c-schedule"></section></div></details>
 <details class="step-card" id="s3"><summary><span class="snum">3</span><span class="stitle">Step 3 · Research Pillars &amp; 0-Token Keyword Planner <em>(Required)</em></span>
 <span class="sbadge" id="s3b"></span><span class="sarrow">▸</span><span class="ssum" id="s3s"></span></summary>
 <div class="sbody"><section id="c-plan"></section><section id="c-people"></section>
@@ -1336,6 +1735,12 @@ main.cc,.cc .card,.step-card,.sbody,.sbody>section,details.fine,.pods,.pod,.qa,.
 .ccp code,.ccp .mono,.ccp .tag,.ccp .kv>*,.ccp .ssum,.ccp .small,.ccp .spill,.ccp .dcard,.ccp table.mini td,.ccp table.mini th,.ccp .topicres{
 overflow-wrap:anywhere;word-break:break-word}.ccp code,.ccp .tag,.ccp .spill{white-space:normal}
 .ccp .in{max-width:100%}.ccp .row label{flex-wrap:wrap;max-width:100%}.ccp table.mini{table-layout:auto;max-width:100%}.ccp .nowrap{white-space:normal}
+/* v3.2.0: update banners, Friday schedule */
+.updb{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 12px;padding:12px 16px;border-radius:12px;
+border:2px solid var(--accent);background:var(--chip);font-size:16px}.updb.repo{border-color:#d4a72c}.updb b{font-weight:700}
+.updb .muted{flex-basis:100%}.slot{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;align-items:center;margin:10px 0;
+padding:10px 12px;border:1px solid var(--line);border-radius:10px}.slot>.small{grid-column:1/-1}.slot input[type=time]{width:8.5em}
+.daybadge{display:inline-block;padding:2px 10px;border-radius:999px;background:var(--chip);border:1px solid var(--line);font-size:14px}
 /* v3.1.2: long text boxes wrap and grow (textarea.auto-grow); labels stack above them (.field) */
 .ccp textarea.in.auto-grow{display:block;width:100%;max-width:100%;min-height:0;overflow-y:hidden;overflow-x:hidden;white-space:pre-wrap;
 overflow-wrap:anywhere;word-break:break-word;resize:vertical;line-height:1.45}
@@ -1438,7 +1843,7 @@ function collect() {
   const u = {positive_keywords: kwPairs(), negative_keywords: S.negative_keywords, negative_override: S.negative_override,
              key1_themes: S.key1_themes, min_score: S.min_score, vip_authors: S.vip_authors, vip_boost: S.vip_boost,
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
-             domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts};
+             domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule};
   u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
   const sh = KW.pillars.map(p => (p.short || '').trim());
   while (sh.length && !sh[sh.length - 1]) sh.pop();
@@ -1534,7 +1939,8 @@ function renderStatus() {  // v3.1.0: the top cockpit, 3 status pods + the quick
     runBtn('rescore_and_seed', null, true, null, 'go'), runBtn('sync_data_repo'), runBtn('pull_data_repo'),
     h('a', {class: 'btn', href: 'DASHBOARD.html'}, '📊 Open Dashboard ↗'),
     h('button', {class: 'btn', onclick: () => save()}, '💾 Save Config'),
-    runBtn('daily', null, false, null, 'small'));
+    runBtn('daily', null, false, null, 'small'),
+    h('button', {class: 'btn small', title: 'Ask GitHub for a new radar version and new commits in your shared repos', onclick: () => checkUpdates(true)}, '🔍 Check Updates'));
   fill($('#c-status'), pods, qa);
   $('#gen').textContent = ST.generated + (API ? ' (live)' : ' (snapshot in this file)');
 }
@@ -1560,7 +1966,7 @@ function renderAdvanced() {
       : h('p', {class: 'muted small'}, 'No venues configured.'),
     h('p', {class: 'muted small'}, 'A 🧭 domain preset (Step 1) can replace this list; for single venues edit "venues" in config.json.'),
     h('h3', {}, '🗓️ Schedule'),
-    h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, STARTER ? 'Unattended runs: README → “Weekly radar and scheduled runs”.' : 'The Minisforum runs the daily task and the Friday sync on its own.'),
+    h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, 'Friday times: ⏰ Friday Schedule in Step 2.'),
     h('h3', {}, '🔑 Optional boosters'),
     h('div', {class: 'kv'}, h('b', {}, 'IEEE API'), h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set' : '⚪ not set (optional): set the IEEE_API_KEY environment variable; README → “Free IEEE API key”'),
       h('b', {}, 'Claude AI'), h('span', {}, env.has_claude ? `🟢 Ready (${env.claude_command})` : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work)'),
@@ -1687,7 +2093,8 @@ async function call(method, path, body) {
 async function run(a, extra) {
   if (!API) return showCommands(a, extra);
   if (JOB.running || ACT) return toast('Another radar run is still running');
-  if (a === 'sync_data_repo' && !confirm('Full sync pushes your clean corpus and your overlay (peers/' + (ST.data_repo.me || 'you') + '.json) to ic-paper-radar-data. Continue?')) return;
+  if (a === 'sync_data_repo' && !confirm('Full sync pushes your clean corpus' + (S.data_repo.share_tags !== false ? ' and your overlay (peers/' + (ST.data_repo.me || 'you') + '.json)' : ' (tag sharing is off: no peers/' + (ST.data_repo.me || 'you') + '.json)') + ' to your shared repo. Continue?')) return;
+  if (a === 'self_update' && !confirm('Update the radar code from GitHub now? config.json, your paper store and output/ are not touched.')) return;
   const body = Object.assign({action: a}, extra || {});
   const dirty = isDirty();
   if (dirty) body.config = collect();
@@ -1716,7 +2123,9 @@ async function poll() {
   JOB.next = r.next; JOB.running = r.running; JOB.rc = r.rc; JOB.action = r.action; lockRun();
   if (r.running) return setTimeout(poll, 1000);
   const t = $('#jobtitle'); if (t) t.textContent = (r.rc ? '❌ ' : '✅ ') + (r.label || '') + (r.rc ? ` failed (exit ${r.rc})` : ' finished');
+  if (r.action === 'self_update' && !r.rc) { toast('⬆️ Updated: reloading…', 3000); return setTimeout(() => location.reload(), 1500); }
   refresh(true);
+  if (['pull_data_repo', 'sync_data_repo', 'clone_data_repo', 'init_data_repo'].includes(r.action)) checkUpdates(false);
 }
 async function refresh(quiet) {
   if (!API) return;
@@ -2170,7 +2579,7 @@ function toggle(obj, key, label, tip) {
 function renderRepoStats() {
   const s = ST.sharing, el = $('#sharestats'); if (!el) return;
   el.textContent = S.data_repo.share_curation
-    ? `You share: ✅ ${fmt(s.selected)} Selected · ⭐ ${fmt(s.cited)} Cited · 🏷️ ${S.data_repo.share_notes ? fmt(s.notes) + ' Tech notes' : 'notes kept private'} (in peers/${ST.data_repo.me || 'you'}.json)`
+    ? `You share: ✅ ${fmt(s.selected)} Selected · ⭐ ${fmt(s.cited)} Cited · 🏷️ ${S.data_repo.share_tags === false ? 'nothing (tag sharing off)' : (S.data_repo.share_notes ? fmt(s.notes) + ' Tech notes' : 'notes kept private')} (in peers/${ST.data_repo.me || 'you'}.json)`
     : 'You share no curation: only the clean corpus (papers, abstracts, digests) goes to the repo.';
 }
 function linesList(arr) { return h('textarea', {class: 'in auto-grow', rows: 2, oninput: e => { arr.splice(0, arr.length, ...e.target.value.split('\n').map(x => x.trim()).filter(Boolean)); changed(); }}, arr.join('\n')); }
@@ -2263,7 +2672,7 @@ function renderRepo() {
       !dr.connected ? h('button', {class: 'btn', title: 'Create your own private data repo, or clone one shared with you', onclick: () => {
         const e = $('#repoopts'); if (!e) return; e.scrollIntoView({behavior: 'smooth', block: 'center'});
         const i = e.querySelector('.in'); if (i) setTimeout(() => i.focus({preventScroll: true}), 350); }}, '📦 Clone / Init') : null),
-    h('p', {class: 'muted small'}, dr.connected ? '📥 Read pulls only (safe any time) · 🔄 Full Sync also pushes to your repo' + (STARTER ? '.' : ' (automatic on Fridays at 12:30).')
+    h('p', {class: 'muted small'}, dr.connected ? '📥 Read pulls only (safe any time) · 🔄 Full Sync also pushes to your repo' + (S.schedule && S.schedule.auto_upload_repo !== false ? ` (automatic on Fridays at ${S.schedule.upload_time}: ⏰ Friday Schedule below).` : '.')
       : (dro.read_repos.length ? 'Read works now (shared repos only); Full Sync needs your own repo: 📦 Clone / Init below.' : 'Solo use works without a repo. For a team: 📦 Clone / Init below.')),
     head,
     h('h3', {}, 'My sharing'), h('p', {id: 'sharestats', class: 'small'}),
@@ -2273,8 +2682,10 @@ function renderRepo() {
     h('label', {class: 'field'}, h('span', {class: 'flabel'}, 'remote_url ', h('span', {class: 'muted small'}, '(your primary private data repo)')),
       ta({class: 'in mono', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
         title: 'Your primary private data repo. A new computer clones it into paths.data_repo_dir automatically.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}, {single: ''})),
-    h('div', {class: 'row'}, toggle(dro, 'share_curation', 'share my curation', 'Write peers/<peer_id>.json (pillars, marks, ⭐, notes) so collaborators see your radar'),
-      toggle(dro, 'share_notes', 'share my 🏷️ notes', 'Include your Tech notes in the overlay'),
+    h('div', {class: 'row'}, toggle(dro, 'share_tags', '🏷️ Share my curated tags & peer radar (✅ / ⭐ / 🔬 / Pillars) to the shared repo',
+        'data_repo.share_tags: write peers/<peer_id>.json so collaborators see your radar. Off: syncs still pull peers and share clean papers, and your peers/<peer_id>.json is removed from the repo in the next sync.')),
+    h('p', {class: 'muted small'}, '🔒 Your 🏷️ text notes (user_note) stay on this computer unless “share my 🏷️ notes” is ticked, and never leave it while tag sharing is off.'),
+    h('div', {class: 'row'}, toggle(dro, 'share_notes', 'share my 🏷️ notes', 'Include your 🏷️ text notes in peers/<peer_id>.json (only while tag sharing is on)'),
       toggle(dro, 'adopt_external', 'adopt shared papers ≥ min_score', 'Merged papers that score ≥ min_score with your keywords join your archive (and can reach your pillars)')),
     STARTER ? h('div', {}, h('h3', {}, 'arXiv feed (optional)'),
       h('div', {class: 'row'}, toggle(ax, 'enabled', 'enabled', 'Run the arXiv queries on the weekly run'), toggle(ax, 'share', 'share arXiv papers', 'Include them in the shared corpus (selected or cited ones always are)')),
@@ -2395,8 +2806,61 @@ function citeModal() {
      h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Close')]);
 }
 
-function renderAll() { renderStatus(); renderProfile(); renderPreset(); renderRepo(); renderPlan(); renderThemes(); renderPeople(); renderTopic(); renderSearch(); renderAdvanced(); renderDeploy(); renderSteps(); lockRun(); }
+function renderAll() { renderStatus(); renderProfile(); renderPreset(); renderRepo(); renderSchedule(); renderPlan(); renderThemes(); renderPeople(); renderTopic(); renderSearch(); renderAdvanced(); renderDeploy(); renderSteps(); lockRun(); }
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
+
+// ---------- v3.2.0: update banners + ⏰ Friday schedule ----------
+let UPD = null, UPD_BUSY = false;
+async function checkUpdates(force) {
+  if (!API || UPD_BUSY) return; UPD_BUSY = true;
+  if (force) toast('🔍 Asking GitHub…', 2500);
+  let r; try { r = await call('GET', '/api/check_updates' + (force ? '?force=1' : '')); } catch (e) { r = null; } finally { UPD_BUSY = false; }
+  if (!r || !r.ok) { if (force) toast('Could not check for updates' + (r && r.error ? ': ' + r.error : '')); return; }
+  UPD = r; renderUpdates();
+  if (force) { const n = updCount(); toast(n ? `${n} update${n === 1 ? '' : 's'} available` : '✅ Everything is up to date' + (r.code.state === 'offline' ? ' (GitHub not reachable)' : ''), 4000); }
+}
+function updCount() { return UPD ? (UPD.code.state === 'behind' || UPD.code.state === 'zip' ? 1 : 0) + UPD.repos.filter(x => x.state === 'behind').length : 0; }
+function renderUpdates() {
+  const el = $('#updbanner'); if (!el) return;
+  if (!UPD) return fill(el);
+  const c = UPD.code, behind = UPD.repos.filter(x => x.state === 'behind'), out = [];
+  const when = h('span', {class: 'muted small'}, `checked ${String(UPD.checked || '').replace('T', ' ')}`, UPD.cached ? ' (cached)' : '');
+  if (c.state === 'behind')
+    out.push(h('div', {class: 'updb'}, h('b', {}, `🚀 New Radar Version Available (${c.behind ? c.behind + ' new commit' + (c.behind === 1 ? '' : 's') : 'new commits'} on GitHub)`),
+      runBtn('self_update', null, true), when));
+  else if (c.state === 'zip')
+    out.push(h('div', {class: 'updb'}, h('b', {}, '📦 This copy came from a ZIP and cannot see new versions'),
+      runBtn('self_update', null, true, '⬆️ Update Radar Now (turn it into a git clone)'),
+      h('span', {class: 'muted small'}, 'config.json, your paper store and output/ are kept as they are')));
+  if (behind.length)
+    out.push(h('div', {class: 'updb repo'}, h('b', {}, `🔔 Shared Repo Update Available (${behind.map(x => x.label).join(', ')} ${behind.length === 1 ? 'has' : 'have'} new commits)`),
+      runBtn('pull_data_repo', null, true, '📥 Pull Updates Now'), when));
+  fill(el, out);
+  lockRun();
+}
+function renderSchedule() {
+  const el = $('#c-schedule'); if (!el) return;
+  const sc = S.schedule = S.schedule || {auto_update_local: true, update_time: '07:00', auto_upload_repo: true, upload_time: '12:00'};
+  const tasks = (ST.schedule && ST.schedule.tasks) || [], tn = slot => (tasks.find(t => t.slot === slot) || {});
+  const warn = h('p', {class: 'warn small', id: 'schedwarn'});
+  const chk = () => { warn.textContent = sc.auto_update_local && sc.auto_upload_repo && sc.upload_time <= sc.update_time
+    ? `⚠️ The upload (${sc.upload_time}) should come after the local update (${sc.update_time}), or it carries last week’s marks.` : ''; };
+  const slot = (key, tkey, title, desc, task) => {
+    const box = h('input', {type: 'checkbox', checked: !!sc[key], onchange: e => { sc[key] = e.target.checked; chk(); changed(); }});
+    const tm = h('input', {class: 'in', type: 'time', value: sc[tkey], step: 60, 'aria-label': title + ' time',
+      oninput: e => { if (e.target.value) { sc[tkey] = e.target.value; chk(); changed(); } }});
+    return h('div', {class: 'slot'}, h('label', {}, box, ' ', h('b', {}, title)), tm,
+      h('div', {class: 'small muted'}, desc, task.name ? h('span', {}, ' · task ', h('code', {}, task.name), task.daily ? ' (every day; Fridays as below)' : '') : null));
+  };
+  fill(el, h('h2', {}, '⏰ Friday Schedule ', h('span', {class: 'daybadge'}, '📅 Every Friday')),
+    howBox('Two slots, so the upload carries the marks you make on Friday morning. Slot 1 pulls the latest shared corpus and peer overlays (if a shared repo or read repos are set up), then builds the Friday report locally: nothing is pushed then. Slot 2 runs --sync (imports offline “Save Marks” files) and then --sync-data-repo: the clean corpus' + (S.data_repo.share_tags !== false ? ' and your tags (peers/<peer_id>.json)' : '') + ' go to your private shared repo. “Save & Apply” registers the tasks with the OS (Windows Task Scheduler: runs when available, also on battery; macOS / Linux: crontab). Unticked slots are disabled.'),
+    slot('auto_update_local', 'update_time', 'Slot 1 · Local update & pull shared repo', 'pull shared repos, then the Friday briefing (briefing.py --friday); no upload', tn('update')),
+    slot('auto_upload_repo', 'upload_time', 'Slot 2 · Upload to private shared repo', 'briefing.py --sync, then --sync-data-repo (clean corpus' + (S.data_repo.share_tags !== false ? ' + Friday marks' : '') + ')', tn('upload')),
+    warn,
+    h('div', {class: 'runbar'}, runBtn('apply_schedule', null, true),
+      h('span', {class: 'muted small'}, (ST.schedule && ST.schedule.os === 'cron') ? 'writes your crontab (lines marked # paper-radar:)' : 'registers / updates Windows scheduled tasks for your user')));
+  chk();
+}
 
 // ---------- saving ----------
 function setPath(o, path, v) { for (const k of path.slice(0, -1)) { if (typeof o[k] !== 'object' || o[k] === null) o[k] = {}; o = o[k]; } o[path[path.length - 1]] = v; }
@@ -2407,11 +2871,13 @@ async function save() {
     let r; try { r = await call('POST', '/api/config', {config: u}); } catch (e) { return alert('The radar server did not answer: ' + e); }
     if (!r.ok) return alert('Not saved: ' + r.error);
     ST = r.status; S = r.editable; buildKW(); renderAll(); baseline = snapshot(); changed();
-    return toast(r.changed.length ? 'Saved config.json: ' + r.changed.join(', ') : 'No changes to save');
+    toast(r.changed.length ? 'Saved config.json: ' + r.changed.join(', ') : 'No changes to save');
+    if (r.clone_needed) { toast('📦 Cloning your shared repo next to the radar folder…', 5000); return run('clone_data_repo'); }
+    return;
   }
   const raw = clone(D.raw);
   for (const [k, v] of Object.entries(u)) {
-    if (k === 'data_repo' || k === 'arxiv') for (const [kk, vv] of Object.entries(v)) setPath(raw, [k, kk], vv);
+    if (k === 'data_repo' || k === 'arxiv' || k === 'schedule') for (const [kk, vv] of Object.entries(v || {})) setPath(raw, [k, kk], vv);
     else setPath(raw, D.paths[k], k === 'positive_keywords' ? Object.fromEntries(v) : v);
   }
   for (const [path, v] of PRESET_PENDING || []) if (path.join('.') !== 'domain_preset') setPath(raw, path, v);
@@ -2450,6 +2916,7 @@ async function connect() {
       const m = $('#mode'); m.textContent = '🟢 Live'; m.title = 'Connected to ' + b + ': buttons run on the radar computer';
       if (j.job && j.job.running) { JOB = {id: j.job.id, next: 0, running: true}; showConsole(`⏳ ${j.job.label}…`, []); poll(); }
       else if (j.active) streamActive(j.active);
+      setTimeout(() => checkUpdates(false), 300);  // after the page is drawn: never holds the load
       return;
     }
   }

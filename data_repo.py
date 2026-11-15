@@ -1,7 +1,7 @@
 """Shared corpus repo (v2.18; peer overlays v2.19): keep every collaborator's corpus identical with one command,
 and let each one see the others' radars.
 
-  python briefing.py --sync-data-repo      (also runs after every Friday finalize when the clone exists)
+  python briefing.py --sync-data-repo      (v3.2.0: Fridays at schedule.upload_time via --friday-upload)
   python briefing.py --pull-data-repo      read only: steps 1-2 below, nothing exported or pushed (pull())
 
 The repo (a private Git repo named ic-paper-radar-data) holds paper_store_clean_share.sqlite (clean: no marks,
@@ -52,9 +52,28 @@ PUSH_BACKOFF = (2.0, 5.0)  # random wait in seconds before each retry, so collid
 
 
 def repo_dir(cfg):
-    """paths.data_repo_dir (~ allowed), else the sibling folder ../ic-paper-radar-data."""
+    """paths.data_repo_dir (~ allowed), else the sibling folder ../ic-paper-radar-data when it holds a clone, else
+    (v3.2.0) ../<repo name of data_repo.remote_url>, where ensure_clone puts a new clone."""
     d = (cfg.get("paths") or {}).get("data_repo_dir")
-    return Path(d).expanduser() if d else HERE.parent / REMOTE_MARK
+    if d:
+        return Path(d).expanduser()
+    default = HERE.parent / REMOTE_MARK
+    name = url_name(((cfg.get("data_repo") or {}).get("remote_url") or ""))
+    if (default / ".git").exists() or not name:
+        return default
+    return HERE.parent / name
+
+
+def url_name(url):
+    """https://github.com/a/my-data(.git) / git@host:a/my-data.git / a/my-data → 'my-data' ('' if none)."""
+    m = re.search(r"([\w.-]+?)(?:\.git)?/?$", str(url or "").strip())
+    return m.group(1) if m and m.group(1) not in (".", "..") else ""
+
+
+def share_tags(cfg):
+    """v3.2.0 data_repo.share_tags (older name share_curation; default true): publish peers/<peer_id>.json."""
+    dr = cfg.get("data_repo") or {}
+    return dr.get("share_tags", dr.get("share_curation", True)) is not False
 
 
 def _git(repo, *args, check=True):
@@ -210,6 +229,14 @@ def ensure_clone(cfg, log=print):
         raise RuntimeError(f"{repo} exists and isn't a clone: move it away or set paths.data_repo_dir")
     log(f"Cloning data_repo.remote_url into {repo} ...")
     _git(HERE, "clone", "--", repo_url(url), str(repo))
+    if not (cfg.get("paths") or {}).get("data_repo_dir"):  # v3.2.0: remember where it went
+        try:
+            import control_center  # here: it imports this module
+            if control_center.write_config([(["paths", "data_repo_dir"], str(repo.resolve()))], cfg):
+                log(f"config.json: paths.data_repo_dir = {repo.resolve()}")
+            cfg.setdefault("paths", {})["data_repo_dir"] = str(repo.resolve())
+        except Exception as e:
+            log(f"  (paths.data_repo_dir not saved: {e})")
     return repo
 
 
@@ -488,7 +515,7 @@ def init_repo(spec, store, store_path, cfg, secrets=(), log=print):
             pass
         s = store_mod.export_clean_share_db(store_path, repo / DB_NAME, secrets=secrets, **kw)
         log(f"  exported {s['papers']} papers into {DB_NAME}")
-        if (cfg.get("data_repo") or {}).get("share_curation", True):
+        if share_tags(cfg):
             write_overlay(store, cfg, repo, me, secrets)
         _git(repo, "add", "-A")
         _git(repo, *_identity(repo, me), "commit", "-m", f"Initialize IC Paper Radar data repo (protocol v{PROTOCOL})")
@@ -575,10 +602,16 @@ def _round(store, store_path, cfg, repo, me, adopt, secrets, push, log):
     added, better = _gain(remote, _snapshot(db))
     if not (added or better):
         _git(repo, "checkout", "--", DB_NAME, check=False)  # keep the remote's file as it is
-    ov_changed, ov_rows = False, 0
-    if (cfg.get("data_repo") or {}).get("share_curation", True):
+    ov_changed, ov_rows, ov_removed = False, 0, False
+    if share_tags(cfg):
         ov_changed, ov_rows = write_overlay(store, cfg, repo, me, secrets)
         log(f"     overlay peers/{me}.json: {ov_rows} rows" + (" (changed)" if ov_changed else " (unchanged)"))
+    elif (repo / PEERS_DIR / f"{me}.json").exists():  # v3.2.0: tag sharing off → unpublish the old overlay
+        (repo / PEERS_DIR / f"{me}.json").unlink()
+        ov_removed = True
+        log(f"     overlay peers/{me}.json removed (data_repo.share_tags is off)")
+    else:
+        log("     no overlay (data_repo.share_tags is off): your marks stay on this computer")
     marker_changed = _stamp_marker(repo, cfg)  # v3.0.4: the repo's domain_preset / radar_title for readers
     _git(repo, "add", "-A", "--", DB_NAME, MARKER, *([PEERS_DIR] if (repo / PEERS_DIR).exists() else []))
     if not _git(repo, "status", "--porcelain").stdout.strip():
@@ -586,6 +619,7 @@ def _round(store, store_path, cfg, repo, me, adopt, secrets, push, log):
         return True, s["papers"], peers
     what = [f"{s['papers']} papers, +{added} new, {better} enriched"] if (added or better) else []
     what += [f"{me}'s radar ({ov_rows} rows)"] if ov_changed else []
+    what += [f"{me}'s radar unpublished"] if ov_removed else []
     what += ["repo domain metadata"] if marker_changed else []
     _git(repo, *_identity(repo, me), "commit", "-m", f"Sync shared corpus ({'; '.join(what)})")
     if not push:

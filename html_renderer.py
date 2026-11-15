@@ -295,6 +295,31 @@ function setMark(doi, mark) {
 
 // ---------- tier 1: live sync with radar_sync_server.py (not part of the Starter Edition) ----------
 const SYNC = PAGE.sync || {hosts: [], port: 0, token: ''};
+// v3.2.0: a quiet line at the top when the radar server (Control Center or sync server) reports updates
+async function updNotice() {
+  if (RO || window.__updDone) return; window.__updDone = true;
+  const own = location.protocol.startsWith('http') ? [location.origin] : [];
+  const bases = own.concat(SYNC.token ? SYNC.hosts.map(h => `http://${h}:${SYNC.port}`) : []);
+  for (const base of [...new Set(bases)]) {
+    const hd = {}; if (base === location.origin) hd['X-Radar-GUI'] = '1'; if (SYNC.token) hd['X-Radar-Token'] = SYNC.token;
+    let r; try { r = await (await fetch(base + '/api/check_updates', {headers: hd, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(20000)})).json(); } catch (e) { continue; }
+    if (!r || !r.ok) continue;
+    const msgs = [];
+    if (r.code && r.code.state === 'behind') msgs.push(`🚀 New radar version on GitHub${r.code.behind ? ` (${r.code.behind} new commit${r.code.behind === 1 ? '' : 's'})` : ''}`);
+    const rb = (r.repos || []).filter(x => x.state === 'behind').map(x => x.label);
+    if (rb.length) msgs.push(`🔔 ${rb.join(', ')}: new shared commits`);
+    if (!msgs.length) return;
+    const bar = document.createElement('div');
+    bar.className = 'updnote';
+    bar.style.cssText = 'margin:6px 12px;padding:6px 12px;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;background:var(--chip);font-size:13.5px';
+    bar.textContent = msgs.join(' · ') + ' — ';
+    const a = document.createElement('a');
+    a.href = (location.pathname.match(/\/(Weekly_Briefings|Topic_Dives|Peers)\//) ? '../' : '') + 'STARTUP.html';
+    a.textContent = 'open ⚙️ Setup to update'; bar.append(a);
+    const hdr = document.querySelector('header.bar'); if (hdr) hdr.after(bar); else document.body.prepend(bar);
+    return;
+  }
+}
 let LIVE = null;   // base URL of the reachable server
 function hdr() { return {'Content-Type': 'application/json', 'X-Radar-Token': SYNC.token}; }
 async function probe() {
@@ -490,7 +515,7 @@ def _page(title, head_extra, bar, body, data, script, mermaid=False):
 <body><header class="bar">{bar}</header>{body}
 <script id="radar-data" type="application/json">{blob}</script>
 <script>{JS_COMMON}{script}
-refreshBars(); pill(); probe(); setInterval(() => {{ if (!LIVE) probe(); }}, 60000);</script>
+refreshBars(); pill(); probe(); setInterval(() => {{ if (!LIVE) probe(); }}, 60000); setTimeout(updNotice, 1500);</script>
 {f'<script src="{MERMAID}"></script><script>if(window.mermaid){{mermaid.initialize({{startOnLoad:true,theme:matchMedia("(prefers-color-scheme: dark)").matches?"dark":"default"}});}}</script>' if mermaid else ''}
 </body></html>"""
 

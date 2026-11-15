@@ -526,6 +526,16 @@ def main():
     g.add_argument("--auto-degrade", action="store_true")
     ap.add_argument("--fetch-pdf", action="store_true")
     ap.add_argument("--finalize", action="store_true", help="finalize this week now (default: on Fridays)")
+    ap.add_argument("--friday", action="store_true", help="Friday slot 1 (v3.2.0): pull the shared repos, then finalize "
+                    "this week (no upload); skipped as a finalize if this week was already finalized today")
+    ap.add_argument("--friday-upload", action="store_true", help="Friday slot 2 (v3.2.0): --sync, then --sync-data-repo")
+    ap.add_argument("--no-auto-sync", action="store_true", help="no pull of the shared repos before the Friday finalize")
+    ap.add_argument("--clone-data-repo", action="store_true", help="clone data_repo.remote_url if there is no clone yet")
+    ap.add_argument("--self-update", action="store_true", help="update the radar code from GitHub (git pull --ff-only)")
+    ap.add_argument("--apply-schedule", action="store_true", help="register the Friday slots (config.json schedule) "
+                    "as OS scheduled tasks (Windows Task Scheduler / crontab)")
+    ap.add_argument("--check-updates", action="store_true", help="print whether GitHub has a new radar version and "
+                    "whether the shared repos have new commits")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-claude", action="store_true")
     ap.add_argument("--no-backfill", action="store_true")
@@ -602,6 +612,31 @@ def main():
     if a.gui is not None:  # the Setup & Control Center: a local server until Ctrl+C (control_center.py)
         import control_center
         return control_center.serve_gui(cfg, a.gui or None, open_browser=not a.no_browser)
+    if a.self_update or a.apply_schedule or a.check_updates:  # v3.2.0, no store needed
+        import control_center
+        if a.check_updates:
+            r = control_center.check_updates(cfg, force=True)
+            print(json.dumps(r, indent=1, ensure_ascii=False))
+            return 0
+        return (control_center.self_update(cfg) if a.self_update else control_center.apply_schedule(cfg))
+    if a.friday_upload:  # v3.2.0 Friday slot 2, like run_data_repo_sync.cmd: two runs, each taking the run lock
+        dr = cfg.get("data_repo") or {}
+        if not ((data_repo.repo_dir(cfg) / ".git").exists() or (dr.get("remote_url") or "").strip()):
+            print("Friday upload: no primary shared repo (Step 2 → remote_url): nothing to upload")
+            return 0
+        rc = 0
+        for extra in (["--sync"], ["--sync-data-repo"]):
+            r = subprocess.call([sys.executable, str(Path(__file__).resolve().parent / "briefing.py"), *extra])
+            rc = r or rc
+        return rc
+    if a.clone_data_repo:  # v3.2.0: STARTUP.html saves a remote_url without a clone → clone it next to the radar
+        try:
+            d = data_repo.ensure_clone(cfg)
+        except Exception as e:
+            print(f"Shared repo not cloned: {e}")
+            return 1
+        print(f"Shared repo clone: {d}" if (d / ".git").exists() else "No data_repo.remote_url: nothing to clone")
+        return 0
     # one radar run at a time (run_lock.py): the scheduled tasks, terminal runs and the Control Center's jobs
     # wait for each other (up to 30 min) instead of working on the store / data-repo clone together
     recall_only = a.recall and not (a.topic or a.drop_topic or a.retire_topic or a.unretire_topic or a.retire_pillar or a.sync or a.rescore or a.lineage or a.add or a.seed_pillars is not None
@@ -621,7 +656,7 @@ def main():
         a.no_claude = True
     today = date.today()
     week, friday = fetcher.week_of(today)
-    final = a.finalize or today.strftime("%A") == cfg["report_day"]
+    final = a.finalize or a.friday or today.strftime("%A") == cfg["report_day"]
 
     store_path = HERE / cfg["paths"]["store_file"]
     out_dir = Path(cfg["paths"]["weekly_dir"])
@@ -634,6 +669,9 @@ def main():
     if fetcher.store_paper_count(store_path) == 0:  # checked before Store() creates an empty file
         print("\n" + fetcher.STORE_TIP + "\n")
     store = Store(store_path)
+    if final and not a.finalize and not a.dry_run and store.meta("last_finalize") == today.isoformat():
+        final = False  # v3.2.0: the daily task and the Friday slot both run on Friday: finalize only once
+        print("This week was already finalized today: a progressive run (use --finalize to finalize again)")
     import scorer
     scorer.prepare(store, cfg)  # v3.0: coupling core + taste model from this store's marks
     topic_dir = Path(cfg["paths"]["topic_dir"])
@@ -663,6 +701,14 @@ def main():
         curation.sync_markdown_marks(store, cfg, read_edits=False)  # bring every report's boxes in line
         html_renderer.write_all(store, cfg)  # after the .md boxes are final
 
+    if final and not a.dry_run and not a.no_auto_sync and store.meta("friday_pull") != today.isoformat():
+        sc = cfg.get("schedule") or {}
+        dr = cfg.get("data_repo") or {}
+        if sc.get("auto_update_local", True) is not False and (
+                (data_repo.repo_dir(cfg) / ".git").exists() or (dr.get("remote_url") or "").strip() or dr.get("read_repos")):
+            print("Friday slot 1: pulling the shared repos first (nothing is pushed now)")
+            pull_data_repo(store, cfg, write_html=False)  # a failure is logged; the local briefing goes on
+            store.meta("friday_pull", today.isoformat())
     if not a.dry_run:
         n = curation.sync_markdown_marks(store, cfg)
         print(f"Curation sync: {n} checkbox change(s) applied")
@@ -813,6 +859,7 @@ def main():
     if final and not a.dry_run:
         for p in allc + all_beyond:
             store.update(p["doi"], {"status": "reported"})
+        store.meta("last_finalize", today.isoformat())
     if not a.dry_run:
         refresh_catalog()
     else:
@@ -822,9 +869,8 @@ def main():
         backup_store(store, cfg, print)
         if final:  # the share database grows with the corpus, once a week
             export_share(store_path, cfg)
-            # then the shared corpus repo, if this computer has a clone of it (silently skipped otherwise)
-            if (cfg.get("data_repo") or {}).get("friday_sync", True) and not data_repo.check_clone(data_repo.repo_dir(cfg), cfg):
-                sync_data_repo(store, store_path, cfg)
+            # v3.2.0: no upload here. The Friday slot 2 (schedule.upload_time, briefing.py --friday-upload) uploads
+            # after the morning's curation; data_repo.friday_sync is no longer read.
     print(store.counts())
     return 0
 
