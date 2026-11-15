@@ -51,6 +51,7 @@
         "n_classic": 6,
         "n_recent": 8,
         "recent_from_year": 2023,
+        "min_year": 0,
         "openalex_per_query": 50,
         "generic_words": ["design", "designs", "focusing", "focus", "technique", "techniques", "based", "using", "with",
                                             "and", "for", "the", "of", "on", "in", "a", "an", "to", "low", "high", "ultra", "method", "methods"],

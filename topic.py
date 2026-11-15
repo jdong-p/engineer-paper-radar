@@ -135,16 +135,36 @@ def _venue_of(name, cfg):
     return None
 
 
+def min_year(cfg):
+    """v3.2.3 topic.min_year: papers published before it are ignored everywhere (0 / blank / <= 1900 = all years)."""
+    try:
+        y = int((cfg.get("topic") or {}).get("min_year") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return y if y > 1900 else 0
+
+
+def year_of(p):
+    return (relations._ym(p.get("published")) or 0) // 12
+
+
+def in_years(p, cfg):
+    """True unless topic.min_year is set and the paper is older (or has no year)."""
+    y0 = min_year(cfg)
+    return not y0 or year_of(p) >= y0
+
+
 def openalex_search(groups, cfg, log):
     """Classics (by citations, before recent_from_year), recent work, and the configured anchor papers
     (they compete on relevance like everything else), in the IC venues."""
     tc = cfg["topic"]
     heads = [next((t for t in g if not t.startswith("re:")), "nanowatt") for g in groups]
     variants = {" ".join(heads)} | {" ".join(heads[:i] + heads[i + 1:]) for i in range(len(heads)) if len(heads) > 2}
-    y0 = tc["recent_from_year"]
+    y0, lo = tc["recent_from_year"], min_year(cfg)
+    spans = [] if lo >= y0 else [(f"publication_year:{lo}-{y0 - 1}" if lo else f"publication_year:<{y0}", "cited_by_count:desc")]
+    spans.append((f"publication_year:>{max(y0, lo) - 1}", None))
     queries = [({"filter": f"{_venue_filter(cfg)},{flt}", "search": s, **({"sort": sort} if sort else {})})
-               for s in variants for flt, sort in ((f"publication_year:<{y0}", "cited_by_count:desc"),
-                                                   (f"publication_year:>{y0 - 1}", None))]
+               for s in variants for flt, sort in spans]
     if cfg.get("anchors"):
         queries.append({"filter": "doi:" + "|".join(a.lower() for a in cfg["anchors"])})
     out = {}
@@ -179,7 +199,10 @@ def ieee_search(groups, cfg, store, budget, log):
     def term(t):
         return '"nW" OR "pW" OR "nanowatt"' if t.startswith("re:") else f'"{t}"'
     q = " AND ".join("(" + " OR ".join(term(t) for t in g[:4]) + ")" for g in groups)
-    r = fetcher._ieee({"querytext": q, "max_records": 200}, cfg, store, log, api="ieee_topic", budget=budget)
+    params = {"querytext": q, "max_records": 200}
+    if min_year(cfg):
+        params["start_year"] = min_year(cfg)  # IEEE Xplore API filter (v3.2.3)
+    r = fetcher._ieee(params, cfg, store, log, api="ieee_topic", budget=budget)
     out = {}
     for a in (r or {}).get("articles") or []:
         v = _venue_of(a.get("publication_title", ""), cfg)
@@ -224,6 +247,8 @@ def pubmed_search(groups, cfg, log, retmax=100):
     out = {}
     try:
         q = {**common, "term": term, "retmax": retmax, "sort": "relevance", "retmode": "json"}
+        if min_year(cfg):  # v3.2.3: PubMed needs both ends of a date range
+            q.update(datetype="pdat", mindate=str(min_year(cfg)), maxdate="3000")
         ids = json.loads(fetcher._get(fetcher.EUTILS + "esearch.fcgi?" + urllib.parse.urlencode(q), cfg))["esearchresult"].get("idlist", [])
         if ids:
             import time
@@ -242,9 +267,10 @@ def pubmed_search(groups, cfg, log, retmax=100):
 
 def select(papers, cfg):
     tc = cfg["topic"]
-    y0 = tc["recent_from_year"]
-    year = lambda p: (relations._ym(p["published"]) or 0) // 12
-    classic = sorted((p for p in papers if p["rel"] > 0 and 0 < year(p) < y0),
+    y0, lo = tc["recent_from_year"], min_year(cfg)
+    year = year_of
+    papers = [p for p in papers if in_years(p, cfg)]
+    classic = sorted((p for p in papers if p["rel"] > 0 and max(0, lo - 1) < year(p) < y0),
                      key=lambda p: -(p["rel"] + math.log10(1 + (p.get("cited_by") or 0))))  # relevance first, citations break ties
     recent = sorted((p for p in papers if p["rel"] > 0 and year(p) >= y0), key=lambda p: -p["rel"])
     return classic[:tc["n_classic"]], recent[:tc["n_recent"]]
@@ -309,12 +335,14 @@ def recall(query, cfg, store, log=print, top=25):
     groups, limit = parse_query(query, cfg)
     hits = []
     for p in local_candidates(store, groups):  # v3.0: FTS5 prefilter (bm25 breaks ties)
+        if not in_years(p, cfg):  # v3.2.3 topic.min_year
+            continue
         r = relevance(p, groups, limit, cfg)[0]
         if r > 0:
             hits.append((r, p))
     hits.sort(key=lambda x: (-x[0], x[1].get("rank") or 0, str(x[1].get("published") or "")))
-    L = [f"# Recall: {query}", "", f"*{date.today():%d %b %Y} · local store only ({len(hits)} matches, top {top} shown) · "
-         "0 API calls, 0 tokens*", ""]
+    L = [f"# Recall: {query}", "", f"*{date.today():%d %b %Y} · local store only ({len(hits)} matches, top {top} shown"
+         + (f", published {min_year(cfg)} or later" if min_year(cfg) else "") + ") · 0 API calls, 0 tokens*", ""]
     for r, p in hits[:top]:
         tag = " ♻️ [Recalled from Archive]" if (p.get("user_mark") == "archived") else (" 📚 corpus" if p["status"] == "archive" else "")
         L += [f"- **{r}** · {p['venue']} {str(p.get('published') or '')[:10]} · [{p['title']}](https://doi.org/{p['doi']}){tag}",
@@ -385,8 +413,8 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
 
     # Stage A — local store + OpenAlex (0 IEEE calls)
     found = {p["doi"]: p for p in local_candidates(store, groups)}  # v3.0: FTS5 prefilter
-    found = {d: p for d, p in found.items() if relevance(p, groups, limit, cfg)[0] > 0}
-    log(f"  local store: {len(found)} relevant")
+    found = {d: p for d, p in found.items() if in_years(p, cfg) and relevance(p, groups, limit, cfg)[0] > 0}
+    log(f"  local store: {len(found)} relevant" + (f" (published {min_year(cfg)} or later)" if min_year(cfg) else ""))
     for d, p in openalex_search(groups, cfg, log).items():
         found.setdefault(d, p)
     if pubmed_active(cfg):  # v3.0.6: bio_med / a PubMed venue
@@ -410,6 +438,10 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
             if p.get(k) and not q.get(k):
                 q[k] = p[k]
         q["cited_by"] = max(q.get("cited_by") or 0, p.get("cited_by") or 0)
+    if min_year(cfg):  # v3.2.3: one filter for every source (arXiv, anchors and unknown dates included)
+        n0 = len(found)
+        found = {d: p for d, p in found.items() if in_years(p, cfg)}
+        log(f"  topic.min_year {min_year(cfg)}: {n0 - len(found)} older papers dropped")
     for p in found.values():
         p["rel"] = relevance(p, groups, limit, cfg)[0]
     pre_c, pre_r = select(list(found.values()), cfg)
@@ -476,7 +508,9 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
     body = _decorate(body, {pid: p for _, pid, p in sel}, recalled)
     graph = mermaid(classic, recent)
     L = [f"# Topic Deep-Dive: {query}", "",
-         f"*{today:%d %b %Y} · {len(classic)} foundational classics (before {tc['recent_from_year']}, ranked by relevance × "
+         f"*{today:%d %b %Y} · {len(classic)} foundational classics ("
+         + (f"{min_year(cfg)}–{tc['recent_from_year'] - 1}" if min_year(cfg) else f"before {tc['recent_from_year']}")
+         + ", ranked by relevance × "
          f"citations) + {len(recent)} recent papers · sources: local store, OpenAlex"
          + (", PubMed" if pubmed_active(cfg) else "")
          + (f", IEEE Xplore API ({store.calls_today('ieee_topic')} topic calls today)" if use_ieee else "") + "*", "",

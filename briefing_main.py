@@ -541,6 +541,10 @@ def main():
     ap.add_argument("--no-backfill", action="store_true")
     ap.add_argument("--topic", help='on-demand deep-dive, e.g. --topic "sub-100nW sensor design and low-leakage techniques"')
     ap.add_argument("--max-ieee", type=int, help="IEEE calls this --topic run may use (from topic.ieee_topic_reserve)")
+    ap.add_argument("--min-year", type=int, metavar="YYYY", help="with --topic / --recall: ignore papers published "
+                    "before YYYY (this run only; 0 = all years; default: topic.min_year)")
+    ap.add_argument("--split-year", type=int, metavar="YYYY", help="with --topic: papers before YYYY are classics, "
+                    "from YYYY on recent (this run only; default: topic.recent_from_year)")
     ap.add_argument("--recall", help="search the whole store (incl. archived + corpus) locally: 0 API calls, 0 tokens")
     ap.add_argument("--drop-topic", metavar="SLUG", help="delete a topic dive permanently from 🔎 Topic Dives (its papers and "
                     "report files stay; --retire-topic keeps its 🔎 badges)")
@@ -745,6 +749,16 @@ def main():
             return 1
         store.meta("topics", topics)
         print(f"Removed topic dive {a.drop_topic} ({len(topics)} left)")
+    if a.min_year is not None or a.split_year is not None:  # v3.2.3: year bounds for this run only
+        tcfg = cfg.setdefault("topic", {})
+        if a.min_year is not None:
+            tcfg["min_year"] = a.min_year if a.min_year > 1900 else 0
+        if a.split_year is not None:
+            if not 1950 <= a.split_year <= 2100:
+                print("--split-year must be a year between 1950 and 2100", file=sys.stderr)
+                return 1
+            tcfg["recent_from_year"] = a.split_year
+        print(f"Topic years: {tcfg.get('min_year') or 'all'} onward, recent from {tcfg.get('recent_from_year')}")
     if a.recall:
         topic.recall(a.recall, cfg, store)
     if a.topic:

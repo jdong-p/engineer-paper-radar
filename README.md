@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.2.1)
+# 📡 Engineer Paper Radar (v3.2.3)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -31,16 +31,24 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 `STARTUP.html` 配置和运行，用 `DASHBOARD.html` 阅读和标记。`config.json`、数据库和 `output/` 只在你的电脑上，不进 Git。
 团队可选用私有数据仓库共享干净语料和各自的标记。每周五：07:00 拉取并在本地生成周报，上午整理，12:00 上传。
 
-## ✨ What's new in v3.2.1
-*v3.2.1 亮点*
+## ✨ What's new in v3.2.3
+*v3.2.3 亮点*
 
-1. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
+1. **📅 Your own year boundaries (v3.2.3):** the 🔎 Topic Deep-Dive card has compact inputs for the
+   **earliest year** (papers before it are ignored by dives and recalls; blank = all years), the
+   **🏛️ classics / 🚀 recent split year** (default 2023) and **how many** of each (default 6 + 8). Step 3 sets the
+   **⏪ Weekly Catch-up & Seed earliest year** (`catch_up.since`, default 2025). From a terminal:
+   `--min-year 2015 --split-year 2022` for one `--topic` / `--recall` run
+   ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
+   专题深挖卡片可设置最早年份（更早的论文不参与专题和检索，留空 = 不限）、经典 / 近期分界年份和各自篇数；第 3 步可设置
+   ⏪ 每周补录与种子的最早年份。命令行可用 `--min-year` / `--split-year` 临时调整。
+2. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
    what's missing (Git, Python), clones the radar, asks two optional questions and opens `STARTUP.html`; see
    [One-command install](#one-command-install). `python install.py --doctor` checks your setup and prints the
    exact fix for anything missing.\
    一行命令完成安装：自动安装缺少的 Git / Python、克隆项目、回答两个可选问题并打开 `STARTUP.html`。
    `python install.py --doctor` 检查环境，并给出缺失项的修复命令。
-2. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
+3. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
    - `STARTUP.html` tells you when GitHub has a **new radar version** (🚀 … **⬆️ Update Radar Now**: a
      `git pull`; a ZIP copy is turned into a Git clone and keeps your `config.json`, store and `output/`) and
      when a teammate pushed to your **shared repo** (🔔 … **📥 Pull Updates Now**). The dashboard shows a quiet
@@ -57,7 +65,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `output/`）以及共享仓库的新提交（📥 一键拉取）。在第 2 步填写 `remote_url` 并保存即自动克隆。**⏰ 周五计划**：
    07:00 拉取并在本地生成周报，12:00 上传干净语料和你周五上午的标记，时间可调，**⏰ Save & Apply** 写入系统计划任务。
    取消勾选 **🏷️ 共享标签** 后，下次同步会从共享仓库删除你的 `peers/<id>.json`，干净论文照常同步。
-3. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+4. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
@@ -66,7 +74,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    DOIs can be pasted several at once, one per line or comma-separated.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。
-4. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+5. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
    folder (`git pull`) and it runs.
@@ -77,21 +85,21 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
    只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-5. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+6. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-6. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+7. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-7. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
-   dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
+8. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+   dive (6 classics + 8 recent papers by default) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-8. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+9. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
 ### The v3.0 foundation (v3.0.2)
@@ -577,8 +585,11 @@ marks, and the next run stores it in the database and in `MASTER_TABLE.md` (Key 
   Leave it in `config.json`; delete it only if you want those entries back.\
   `not_a_paper` 正则会跳过 IEEE 当作论文收录的教程、短课程、论坛和全体报告（共享数据库中约 24 条），请保留。
 - **Settings** in `config.json` → `catch_up`: `since`, `per_pillar`, `min_candidates_per_pillar` (10 when
-  missing), `flagship_venues`, `flagship_bonus`, `not_a_paper`.\
-  均可在 `config.json` 的 `catch_up` 中修改。
+  missing), `flagship_venues`, `flagship_bonus`, `not_a_paper`. `since` is also in `STARTUP.html` → Step 3 →
+  **⏪ Weekly Catch-up & Seed earliest year** (type `2024` or a date like `2024-06-01`; a year is stored as
+  `2024-01-01`). It moves only the catch-up and `--seed-pillars` boundary: weekly runs always fetch the newest
+  papers.\
+  均可在 `config.json` 的 `catch_up` 中修改；`since` 也可在 STARTUP.html 第 3 步中设置（只影响补录与种子，不影响每周抓取新论文）。
 
 ---
 
@@ -1039,10 +1050,15 @@ python briefing.py --cite "<DOI or title words>"   # also --select, --uncite, --
 python briefing.py --seed-pillars 15            # want more now? 15 this week instead of 10
 python briefing.py --topic "noise-shaping SAR ADC with passive integrator"
 python briefing.py --recall "ring oscillator"   # local store only, 0 calls
+python briefing.py --topic "ring amplifier" --min-year 2015 --split-year 2022   # years for this run only
 ```
 
 `--topic` combines the local store, OpenAlex, PubMed (BioMed preset) and, with a key, the IEEE API: 6
-classics by relevance and citations plus 8 recent papers, written to `output/Topic_Dives/`. The synthesis uses
+classics by relevance and citations plus 8 recent papers, written to `output/Topic_Dives/`. A classic is published
+before `topic.recent_from_year` (2023), a recent paper in or after it; `topic.min_year` (0 = all years) drops
+older papers from every source (OpenAlex, IEEE and PubMed get it as a filter) and from `--recall`;
+`topic.n_classic` / `topic.n_recent` set the counts (1–20). `--min-year` / `--split-year` override the first
+two for one run. The synthesis uses
 your domain preset's wording and evidence badges. Without the Claude CLI (or with `--no-claude`) you still get
 the dive, at 0 tokens: ranked tables with key numbers from the abstracts and the citation map. It works even
 before you configure pillars. `--retire-topic <slug>` moves a dive to 🏺 Past / Antique Dives (everything kept,
@@ -1052,7 +1068,8 @@ before you configure pillars. `--retire-topic <slug>` moves a dive to 🏺 Past 
 综述按你的领域预设措辞。没有 Claude CLI 时同样生成专题（0 token：排序表格、摘要关键数字和引用图）。
 
 **In the Control Center:** the **🔎 Topic Deep-Dive & Local Recall** card runs both with one click (a
-0-Token Fast Mode toggle included) and shows, as you type, how your question is split into concept groups. It
+0-Token Fast Mode toggle included) and shows, as you type, how your question is split into concept groups.
+Its **📅 Earliest year**, **🏛️ / 🚀 split year**, **🏛️ classics** and **🚀 recent** boxes are saved with the run. It
 lists your dives with 📄 Report, 🏺 Retire / ↺ Restore and 🗑 Delete, and **📌 Promote Dive to Weekly Pillar** turns a dive into a permanent
 pillar. On the dashboard, 🔎 Topic Dives ends with **＋ New Topic Dive ↗**.
 
@@ -1120,6 +1137,7 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `python briefing.py --seed-pillars N` | Put the best papers of each pillar on the radar now: at least N this week, and up to 10 unreviewed |
 | `python briefing.py --topic "..."` | Topic deep-dive (local + OpenAlex [+ IEEE]) |
 | `python briefing.py --recall "..."` | Search the local store only |
+| `--min-year YYYY` / `--split-year YYYY` | With `--topic` / `--recall`: ignore older papers / move the classics–recent boundary, this run only |
 | `python briefing.py --retire-topic SLUG` / `--unretire-topic SLUG` | 🏺 Retire a topic dive (everything kept) / ↺ restore it |
 | `python briefing.py --drop-topic SLUG` | Delete a topic dive (its papers, marks and report files stay) |
 | `python briefing.py --retire-pillar N` | 🏺 Retire pillar N: papers keep a 🏺 badge, keywords backed up, later pillars move up one |
@@ -1272,7 +1290,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.2.1},
+  version   = {3.2.3},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}

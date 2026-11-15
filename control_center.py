@@ -75,7 +75,9 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "key1_themes": ["beyond_ieee", "key1_themes"], "min_score": ["min_score"], "vip_authors": ["vip_authors"],
          "vip_boost": ["vip_boost"], "anchors": ["anchors"], "contact_email": ["contact_email"],
          "data_repo_dir": ["paths", "data_repo_dir"], "domain_preset": ["domain_preset"], "deployment": ["deployment"],
-         "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"]}
+         "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"], "topic": ["topic"],
+         "catch_up_since": ["catch_up", "since"]}
+TOPIC_KEYS = {"min_year": (0, 2100), "recent_from_year": (1950, 2100), "n_classic": (1, 20), "n_recent": (1, 20)}  # v3.2.3
 DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
 # v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
 SCHEDULE_DEFAULTS = {"auto_update_local": True, "update_time": "07:00", "auto_upload_repo": True, "upload_time": "12:00"}
@@ -150,6 +152,36 @@ def share_tags_on(cfg):
     return dr.get("share_tags", dr.get("share_curation", True)) is not False
 
 
+def topic_cfg(cfg):
+    """v3.2.3: the topic-dive year bounds and pick counts STARTUP.html edits (min_year 0 = all years)."""
+    t = cfg.get("topic") or {}
+    out = {"min_year": 0, "recent_from_year": 2023, "n_classic": 6, "n_recent": 8}
+    for k, (lo, hi) in TOPIC_KEYS.items():
+        try:
+            v = int(t.get(k, out[k]) or 0)
+        except (TypeError, ValueError):
+            continue
+        if k == "min_year" and v <= 1900:
+            v = 0
+        if v == 0 and k == "min_year" or lo <= v <= hi:
+            out[k] = v
+    return out
+
+
+def catch_up_date(v):
+    """'2025' or '2025-01-01' (or 2025) → '2025-01-01'; another valid date stays as it is; else ValueError."""
+    t = str(v).strip()
+    if re.fullmatch(r"(19[5-9]\d|20\d\d|2100)", t):
+        return t + "-01-01"
+    try:
+        d = datetime.strptime(t, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError("catch_up.since: a year like 2025 or a date like 2025-01-01")
+    if not 1950 <= d.year <= 2100:
+        raise ValueError("catch_up.since: a year between 1950 and 2100")
+    return d.strftime("%Y-%m-%d")
+
+
 def schedule_cfg(cfg):
     """config.json "schedule" over SCHEDULE_DEFAULTS (bad times fall back to the default)."""
     s = cfg.get("schedule") or {}
@@ -189,7 +221,8 @@ def editable(cfg):
            "data_repo_dir": (cfg.get("paths") or {}).get("data_repo_dir") or "",
            "domain_preset": presets.key(cfg), "deployment": deployment(cfg),
            "sync_hosts": list((cfg.get("sync_server") or {}).get("hosts") or []),
-           "schedule": schedule_cfg(cfg)}
+           "schedule": schedule_cfg(cfg),
+           "topic": topic_cfg(cfg), "catch_up_since": str((cfg.get("catch_up") or {}).get("since") or "2025-01-01")}
     if STARTER:
         out["arxiv"] = {k: ax.get(k, False if k in ("enabled", "share") else []) for k in ARXIV_KEYS}
     return out
@@ -318,6 +351,37 @@ def validate(upd, cfg):
         elif k == "data_repo_dir":
             put(PATHS[k], lambda v=v: v.strip() if isinstance(v, str) and len(v) < 500 and not re.search(r"[\r\n\0]", v)
                 else _fail("data_repo_dir: expected a folder path"))
+        elif k == "catch_up_since":
+            put(PATHS[k], lambda v=v: catch_up_date(v))
+        elif k == "topic":  # v3.2.3: only the year bounds and pick counts; the rest of "topic" stays as it is
+            if not isinstance(v, dict):
+                errs.append("topic: expected an object")
+                continue
+            for kk, vv in v.items():
+                if kk not in TOPIC_KEYS:
+                    errs.append(f"topic.{kk}: not editable here")
+                    continue
+                lo, hi = TOPIC_KEYS[kk]
+
+                def num(vv=vv, kk=kk, lo=lo, hi=hi):
+                    if vv in (None, "") and kk == "min_year":
+                        return 0
+                    if isinstance(vv, bool) or not isinstance(vv, (int, float, str)):
+                        return _fail(f"topic.{kk}: expected a number")
+                    try:
+                        n = int(str(vv).strip())
+                    except ValueError:
+                        return _fail(f"topic.{kk}: expected a whole number")
+                    if kk == "min_year" and n <= 1900:
+                        return 0
+                    return n if lo <= n <= hi else _fail(f"topic.{kk}: {lo}–{hi}")
+                put(["topic", kk], num)
+            t = dict(topic_cfg(cfg), **{kk: vv for kk, vv in v.items() if kk in ("min_year", "recent_from_year")})
+            try:
+                if int(t.get("min_year") or 0) > 1900 and int(t["min_year"]) > int(t["recent_from_year"]):
+                    errs.append("topic.min_year must not be after the classic / recent split year")
+            except (TypeError, ValueError):
+                pass
         elif k == "schedule":
             if not isinstance(v, dict):
                 errs.append("schedule: expected an object")
@@ -893,8 +957,10 @@ def plan(action, cfg, opts=None):
     adopt = [["--adopt-external"]] if (cfg.get("data_repo") or {}).get("adopt_external", True) is not False else []
     o = opts or {}
     q = str(o.get("query") or "<your research question>")  # --topic=… / --recall=…: a query can't pose as a flag
-    return {"topic_recall": [["--recall=" + q]],
-            "topic_dive": [["--topic=" + q] + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
+    years = ([f"--min-year={int(o['min_year'])}"] if o.get("min_year") is not None else []) \
+        + ([f"--split-year={int(o['split_year'])}"] if o.get("split_year") is not None else [])  # v3.2.3
+    return {"topic_recall": [["--recall=" + q] + years[:1]],
+            "topic_dive": [["--topic=" + q] + years + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
             "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],
             "retire_topic": [["--retire-topic=" + str(o.get("slug") or "<slug>")]],  # v3.0.8: 🏺 Retire as Antique
             "unretire_topic": [["--unretire-topic=" + str(o.get("slug") or "<slug>")]],
@@ -1190,6 +1256,12 @@ def api_post(path, req, jobs):
                 if not 3 <= len(qq) <= 300 or not re.search(r"[^\W\d_]{2}", qq):
                     return 400, {"ok": False, "error": "type a topic or research question (3–300 characters)"}
                 req["query"], req["zero"] = qq, bool(req.get("zero"))
+                for k, lo, hi in (("min_year", 0, 2100), ("split_year", 1950, 2100)):  # v3.2.3, this run only
+                    y = req.get(k)
+                    if y in (None, ""):
+                        req[k] = None
+                    elif isinstance(y, bool) or not isinstance(y, int) or not (lo <= y <= hi):
+                        return 400, {"ok": False, "error": f"{k}: a year ({lo}–{hi})"}
             if action == "retire_pillar":  # v3.0.8: an existing, non-fixed pillar, and nothing else unsaved with it
                 import catalog
                 load_cfg()
@@ -1217,6 +1289,7 @@ def api_post(path, req, jobs):
                 if not isinstance(an, list) or len(an) > 10 or not all(isinstance(d, str) and DOI_RX.match(d) for d in an):
                     return 400, {"ok": False, "error": "add_pillar: anchors must be up to 10 DOIs"}
             job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug",
+                                                              "min_year", "split_year",
                                                               "pillar", "anchors")})
             return 200, {"ok": True, "changed": changed, "job": job}
     except ValueError as e:
@@ -1617,7 +1690,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.2</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.3</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1753,6 +1826,8 @@ main.cc,.cc .card,.step-card,.sbody,.sbody>section,details.fine,.pods,.pod,.qa,.
 .ccp code,.ccp .mono,.ccp .tag,.ccp .kv>*,.ccp .ssum,.ccp .small,.ccp .spill,.ccp .dcard,.ccp table.mini td,.ccp table.mini th,.ccp .topicres{
 overflow-wrap:anywhere;word-break:break-word}.ccp code,.ccp .tag,.ccp .spill{white-space:normal}
 .ccp .in{max-width:100%}.ccp .row label{flex-wrap:wrap;max-width:100%}.ccp table.mini{table-layout:auto;max-width:100%}.ccp .nowrap{white-space:normal}
+/* v3.2.3: compact year / count inputs */
+.ccp .in.w4{width:7.5em}.ccp .in.w6{width:7.5em}.ccp .topicyears{gap:6px 14px}
 /* v3.2.0: update banners, Friday schedule */
 .updb{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin:0 0 12px;padding:12px 16px;border-radius:12px;
 border:2px solid var(--accent);background:var(--chip);font-size:16px}.updb.repo{border-color:#d4a72c}.updb b{font-weight:700}
@@ -1861,7 +1936,8 @@ function collect() {
   const u = {positive_keywords: kwPairs(), negative_keywords: S.negative_keywords, negative_override: S.negative_override,
              key1_themes: S.key1_themes, min_score: S.min_score, vip_authors: S.vip_authors, vip_boost: S.vip_boost,
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
-             domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule};
+             domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule,
+             topic: S.topic, catch_up_since: S.catch_up_since};
   u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
   const sh = KW.pillars.map(p => (p.short || '').trim());
   while (sh.length && !sh[sh.length - 1]) sh.pop();
@@ -2213,7 +2289,15 @@ function renderThemes() {
     h('h3', {}, 'Negative override (regex on the title) ', h('span', {class: 'tip muted small', title: 'When the title matches, a negative keyword only costs negative_penalty instead of zeroing the paper. Python regex; (?i) = case-insensitive. Empty = off.'}, 'ⓘ')),
     ta({class: 'in wide mono', value: S.negative_override, placeholder: '(?i)harvest|temperature sensor|…', oninput: e => { S.negative_override = e.target.value; changed(); }}, {single: ''}),
     h('div', {class: 'row'}, h('label', {}, 'min_score ', h('input', {class: 'in w', type: 'number', min: 0, max: 1000, step: 1, value: S.min_score,
-      oninput: e => { S.min_score = Number(e.target.value); changed(); }})), h('span', {class: 'muted small'}, 'papers below this score never become candidates (default 5).')));
+      oninput: e => { S.min_score = Number(e.target.value); changed(); }})), h('span', {class: 'muted small'}, 'papers below this score never become candidates (default 5).')),
+    h('div', {class: 'row'}, h('label', {title: 'catch_up.since (stored as YYYY-01-01 for a plain year)'}, '⏪ Weekly Catch-up & Seed earliest year ',
+      h('input', {class: 'in w6', value: /-01-01$/.test(S.catch_up_since || '') ? S.catch_up_since.slice(0, 4) : (S.catch_up_since || ''), placeholder: '2025',
+        onchange: e => { const v = e.target.value.trim();
+          if (/^(19[5-9]\d|20\d\d|2100)$/.test(v)) S.catch_up_since = v + '-01-01';
+          else if (/^\d{4}-\d\d-\d\d$/.test(v)) S.catch_up_since = v;
+          else { alert('A year like 2025, or a date like 2025-01-01'); e.target.value = (S.catch_up_since || '').slice(0, 4); return; }
+          changed(); }})),
+      h('span', {class: 'muted small'}, 'Weekly runs fetch the newest papers (last 7 days); ⏪ Catch-up and Seed Pillars also pull high-scoring corpus papers published since this year.')));
   renderPillarCounts();
   renderPlan();
 }
@@ -2233,9 +2317,14 @@ function topicRun(a) {
   if (q.length < 3) return alert('Type a topic or research question first.');
   const zero = TZERO || !ST.env.has_claude;
   TLAST = {a, q, slug: topicSlug(q)};
+  const ty = S.topic || {};
   if (!API) return topicStatic([`${pyCmd()} briefing.py ${a === 'topic_recall' ? '--recall' : '--topic'} "${q.replace(/"/g, "'")}"` +
+                                (+ty.min_year > 1900 ? ` --min-year ${ty.min_year}` : '') +
+                                (a === 'topic_dive' && ty.recent_from_year ? ` --split-year ${ty.recent_from_year}` : '') +
                                 (a === 'topic_dive' && zero ? ' --no-claude' : '')]);
-  run(a, {query: q, zero});
+  const tp = S.topic || {}, years = {min_year: +tp.min_year || 0, split_year: +tp.recent_from_year || 2023};
+  if (years.min_year && years.min_year > years.split_year) return alert('The earliest year must not be after the classic / recent split year.');
+  run(a, {query: q, zero, ...years});
 }
 function dropTopic(t) {
   if (!API) return topicStatic([`${pyCmd()} briefing.py --drop-topic ${t.slug}`]);
@@ -2393,7 +2482,21 @@ function renderTopic() {
     oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }}, {single: ' ', enter: () => topicRun('topic_dive')});
   const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
   zbox.checked = TZERO || noClaude; zbox.disabled = noClaude;
-  const btn = (a, primary) => h('button', {class: 'btn' + (primary ? ' primary' : ''), 'data-run': a, title: RUN_TIPS[a], onclick: () => topicRun(a)}, D.actions[a]);
+  const tp = S.topic = S.topic || {min_year: 0, recent_from_year: 2023, n_classic: 6, n_recent: 8};
+  const btn = (a, primary) => h('button', {class: 'btn' + (primary ? ' primary' : ''), 'data-run': a, title: RUN_TIPS[a], onclick: () => topicRun(a)},
+    a === 'topic_dive' ? `🔎 Run Full Topic Dive (${tp.n_classic} Classics + ${tp.n_recent} SOTA)` : D.actions[a]);
+  const yr = (key, label, ph, lo, hi, tip) => h('label', {class: 'small', title: tip}, label + ' ',
+    h('input', {class: 'in w4', type: 'number', min: lo, max: hi, step: 1, placeholder: ph, value: key === 'min_year' && !tp[key] ? '' : tp[key],
+      onchange: e => { const v = e.target.value.trim(), n = Math.round(+v);
+        if (key === 'min_year' && (v === '' || n <= 1900)) tp[key] = 0;
+        else if (!(n >= lo && n <= hi)) { alert(`${label}: ${lo}–${hi}`); e.target.value = key === 'min_year' && !tp[key] ? '' : tp[key]; return; }
+        else tp[key] = n;
+        changed(); renderTopic(); }}));
+  const years = h('div', {class: 'row topicyears'},
+    yr('min_year', '📅 Earliest year', 'All years', 1901, 2100, 'topic.min_year: papers published before this year are ignored by dives and recalls (blank = all years)'),
+    yr('recent_from_year', '🏛️ / 🚀 split year', '2023', 1950, 2100, 'topic.recent_from_year: before it = 🏛️ Classics, from it on = 🚀 Recent SOTA'),
+    yr('n_classic', '🏛️ classics', '6', 1, 20, 'topic.n_classic: how many classics a dive picks (1–20)'),
+    yr('n_recent', '🚀 recent', '8', 1, 20, 'topic.n_recent: how many recent papers a dive picks (1–20)'));
   let result = null;
   if (TLAST && !JOB.running) {
     const d = TLAST.a === 'topic_dive' ? T.dives.find(x => x.slug === TLAST.slug) : null;
@@ -2415,14 +2518,15 @@ function renderTopic() {
       h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Delete permanently (the papers lose this dive\'s badge; marks, notes and report files stay)', onclick: () => dropTopic(t)}, '🗑'))))))
     : h('p', {class: 'muted small'}, 'No topic dives yet.');
   fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
-    h('div', {class: 'row'}, inp),
+    h('div', {class: 'row'}, inp), years,
     h('div', {class: 'row'}, btn('topic_recall'), btn('topic_dive', true),
       h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
         zbox, noClaude ? ' 0-Token Fast Mode (no Claude CLI found)' : ' 0-Token Fast Mode (--no-claude)')),
     h('div', {class: 'muted small', id: 'topicgroups'}, API ? 'Type a question to see how it is split into concept groups.' : ''),
-    h('p', {class: 'muted small'}, '⚡ Recall: your local store, 0 API calls · 🔎 Deep-Dive: + OpenAlex, 6 classics + 8 recent papers.'),
+    h('p', {class: 'muted small'}, `⚡ Recall: your local store, 0 API calls · 🔎 Deep-Dive: + OpenAlex, ${tp.n_classic} classics ` +
+      (tp.min_year ? `(${tp.min_year}–${tp.recent_from_year - 1})` : `(before ${tp.recent_from_year})`) + ` + ${tp.n_recent} recent papers (${tp.recent_from_year} on). The years and counts are saved with the run.`),
     howBox('⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
-      '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ' (and PubMed for BioMed), picks 6 🏛️ classics + 8 🚀 recent papers, ' +
+      '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ` (and PubMed for BioMed), picks ${tp.n_classic} 🏛️ classics + ${tp.n_recent} 🚀 recent papers, ` +
       'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
     result,
     h('h3', {}, `Existing Topic Dives (${T.dives.length})`), dives,
@@ -2900,7 +3004,7 @@ async function save() {
   }
   const raw = clone(D.raw);
   for (const [k, v] of Object.entries(u)) {
-    if (k === 'data_repo' || k === 'arxiv' || k === 'schedule') for (const [kk, vv] of Object.entries(v || {})) setPath(raw, [k, kk], vv);
+    if (k === 'data_repo' || k === 'arxiv' || k === 'schedule' || k === 'topic') for (const [kk, vv] of Object.entries(v || {})) setPath(raw, [k, kk], vv);
     else setPath(raw, D.paths[k], k === 'positive_keywords' ? Object.fromEntries(v) : v);
   }
   for (const [path, v] of PRESET_PENDING || []) if (path.join('.') !== 'domain_preset') setPath(raw, path, v);
