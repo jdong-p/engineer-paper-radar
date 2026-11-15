@@ -13,6 +13,24 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
+## 🧭 At a glance
+*一览*
+
+| | |
+|---|---|
+| **What it does** | Collects new papers from your field's journals and conferences (Crossref, OpenAlex; optionally IEEE, PubMed, bioRxiv, arXiv), scores each one against your research **pillars** (weighted keywords), and keeps a ranked, searchable dashboard plus a weekly report. |
+| **Where it runs** | On your own computer: Windows, macOS or Linux, Python 3.8+ standard library only. No server, no account, no paid API. AI digests (Claude CLI) are optional. |
+| **How you use it** | `output/STARTUP.html` (the Control Center: setup, runs, sync, schedule; start it with `Start_Radar_GUI.cmd` / `.command` or `python briefing.py --gui`) and `output/DASHBOARD.html` (read, search, ✅ Select / ⭐ Cite / 🗄️ Archive, 🏷️ notes). |
+| **Your data** | `config.json` (your settings), `paper_store.sqlite` (every paper seen, with your marks) and `output/` stay on your computer and are never in Git, so `git pull` never touches them. |
+| **Team sharing (optional)** | A private GitHub **data repo** holds a clean copy of the corpus (no marks) and, if you allow it, `peers/<you>.json` (your ✅ / ⭐ / pillars) so colleagues see your radar read-only. |
+| **The weekly rhythm** | Any day: 🌐 Fetch New Papers Now (or a daily task) adds the week's papers. **Friday** (⏰ Friday Schedule): 07:00 pulls the shared repo and finalizes the weekly report locally; you curate in the morning; 12:00 uploads the corpus and your marks. |
+| **Install / check** | One command (see [Quick Start](#one-command-install)); `python install.py --doctor` checks Python, Git, the folder and the network and prints exact fixes. |
+| **Main code** | `briefing.py` → `briefing_main.py` (every run), `control_center.py` (STARTUP.html and its local API), `data_repo.py` (shared repos), `fetcher.py` / `scorer.py` (collection and scoring), `html_renderer.py` (pages). Full list: [Project layout](#project-layout). |
+
+在本机运行的论文雷达：按你的研究方向（pillars，加权关键词）为新论文打分，生成可搜索的面板和每周报告。用
+`STARTUP.html` 配置和运行，用 `DASHBOARD.html` 阅读和标记。`config.json`、数据库和 `output/` 只在你的电脑上，不进 Git。
+团队可选用私有数据仓库共享干净语料和各自的标记。每周五：07:00 拉取并在本地生成周报，上午整理，12:00 上传。
+
 ## ✨ What's new in v3.2.1
 *v3.2.1 亮点*
 
@@ -45,9 +63,9 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
    long explanations sit behind **💡 How this works**. v3.1.1 fixes phone widths: long paths now wrap. In v3.1.2, long inputs (folder paths, repo URLs, pillar names,
    anchor DOIs, seed words, Topic Dive and Search) wrap and grow as you type, with the label above the box; anchor
-   DOIs can be pasted several at once, one per line or comma-separated. The Quick Start below now starts from `git clone`.\
+   DOIs can be pasted several at once, one per line or comma-separated.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
-   自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。快速开始改为从 `git clone` 开始。
+   自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。
 4. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
@@ -115,15 +133,15 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 
 ---
 
-## 🚀 Quick Start: `git clone`, then set up visually in `STARTUP.html`
-*快速开始：`git clone`，然后在 `STARTUP.html` 中可视化配置*
+## 🚀 Quick Start: one command, then set up visually in `STARTUP.html`
+*快速开始：一行命令安装，然后在 `STARTUP.html` 中可视化配置*
 
-Get the radar with **`git clone`**, not GitHub's *Download ZIP*: a clone updates with one `git pull`, and the
-same Git lets your team share one private paper corpus. Everything after that is buttons in the browser: no
-`config.json` by hand, no AI agent.
+The installer (or the manual `git clone` below) gives you a **Git clone**, not a *Download ZIP* copy: a clone
+updates with one click (**⬆️ Update Radar Now**) or `git pull`, and the same Git lets your team share one private
+paper corpus. Everything after that is buttons in the browser: no `config.json` by hand, no AI agent.
 
-请用 **`git clone`** 获取本项目，而不是 GitHub 的 *Download ZIP*：克隆的副本只需 `git pull` 即可更新，同样的 Git
-也让团队共享同一个私有论文库。之后的一切都在浏览器中点按钮完成，无需手写 `config.json`，也不需要 AI 助手。
+安装脚本（或下面的手动 `git clone`）得到的是 **Git 克隆**而不是 *Download ZIP* 副本：克隆可一键更新（⬆️ Update
+Radar Now 或 `git pull`），同样的 Git 也让团队共享同一个私有论文库。之后的一切都在浏览器中点按钮完成。
 
 <a name="one-command-install"></a>
 ### ⚡ One-command install (Windows PowerShell & macOS / Linux Terminal)
@@ -176,8 +194,12 @@ to only print what it would do.
 
 **想手动安装？** 下面的手动步骤用三行 `git` / `python` 命令完成同样的事。
 
-### Step 1: Install Git and Python, clone, launch
-*第一步：安装 Git 和 Python，克隆，启动*
+### Step 1: Install Git and Python, clone, launch (manual alternative)
+*第一步：安装 Git 和 Python，克隆，启动（手动方式）*
+
+Skip this if the one-command install above worked: it already did all of Step 1.
+
+如果上面的一行命令安装已成功，可跳过本步。
 
 **Windows (PowerShell):**
 
@@ -219,20 +241,24 @@ python3 briefing.py --gui
 - **The private data repo is optional.** Skip that line if nobody invited you. Replace
   `<owner>/<private-data-repo>` with the repo you were invited to (you need **write** access; with read
   access, add it later in Step 2 → 📚 Shared repos to read). Keep the folder name `ic-paper-radar-data`:
-  the radar finds a clone in that sibling folder by itself. Git asks you to sign in to GitHub once (Windows
+  the radar finds a clone in that sibling folder by itself. **Easier:** skip the line, paste the repo's URL in
+  `STARTUP.html` → Step 2 → `remote_url` and click **💾 Save**: it is cloned next to the radar as
+  `../<repo name>` for you. Git asks you to sign in to GitHub once (Windows
   opens a browser; on macOS / Linux run `gh auth login` first).\
   **私有数据仓库是可选的**：没人邀请你就跳过这一行。把 `<owner>/<private-data-repo>` 换成你被邀请的仓库（需要**写**
   权限；只有读权限时，之后在第 2 步 → 📚 Shared repos to read 中添加）。保持文件夹名 `ic-paper-radar-data`，雷达会
-  自动找到这个同级文件夹中的克隆。Git 会要求登录 GitHub 一次（Windows 会打开浏览器；macOS / Linux 请先运行
+  自动找到这个同级文件夹中的克隆。更简单：跳过这一行，在 STARTUP.html 第 2 步填写 `remote_url` 并保存，会自动克隆到 `../<仓库名>`。Git 会要求登录 GitHub 一次（Windows 会打开浏览器；macOS / Linux 请先运行
   `gh auth login`）。
 - **Next time**, start it the same way, or double-click **`Start_Radar_GUI.cmd`** (Windows) /
   **`Start_Radar_GUI.command`** (macOS; the first time, right-click → Open). Keep its window open while you
   use the page: it is a small server on `http://127.0.0.1:18766` (this computer only).\
   **以后**用同样的命令启动，或双击 **`Start_Radar_GUI.cmd`**（Windows）/ **`Start_Radar_GUI.command`**（macOS，
   首次需右键 → 打开）。使用期间请保持该窗口打开：它是只在本机 `127.0.0.1` 上运行的小服务器。
-- **Update** any time with `git pull` in the `engineer-paper-radar` folder (your settings, store and
-  `output/` are not in Git, so a pull never touches them).\
-  **更新**：在 `engineer-paper-radar` 文件夹中运行 `git pull`（你的设置、数据库和 `output/` 不在 Git 中，不会被改动）。
+- **Update** any time: `STARTUP.html` shows **🚀 New Radar Version Available** when GitHub has one, and
+  **⬆️ Update Radar Now** pulls it; or run `git pull` in the `engineer-paper-radar` folder. Your settings, store
+  and `output/` are not in Git, so an update never touches them.\
+  **更新**：有新版本时 `STARTUP.html` 会显示 🚀 提示，点 **⬆️ Update Radar Now** 即可；也可运行 `git pull`。你的设置、
+  数据库和 `output/` 不在 Git 中，不会被改动。
 - Python **3.8 or newer** works. If yours is older (or missing), the launcher and `briefing.py` say which
   version they found and show the one-line install command.\
   支持 Python **3.8 及以上**；版本过旧或未安装时，启动器和 `briefing.py` 会显示找到的版本和一行安装命令。
@@ -255,12 +281,18 @@ sets it. Below, four numbered steps open by themselves while they still need you
    Solid-State Circuits, 🧬 Biology, Biomedical & Medicine, 🧪 Chemistry, Materials & ChemE, or 🛠️ Robotics,
    Control & General Engineering.\
    **第 1 步 · 基本信息与学科预设（必需）**：填写 **✉️ 联系邮箱** 并点 **💾 Save Step 1**，然后在你的学科卡片上点 **Apply**。
-2. **Step 2 · Private Shared Repo & Team Sync (recommended for teams):** cloned a data repo in Step 1? Click
-   **📥 Read / Pull Shared Repos** to load every paper. Otherwise **📦 Clone / Init** creates your own private
-   repo (**✨ Create / Init My Private Repo**) or clones one shared with you. **🔄 Full Sync with Primary Repo**
-   pulls and pushes. Solo use works without any repo.\
-   **第 2 步 · 私有共享仓库与团队同步（推荐团队使用）**：已在第一步克隆了数据仓库？点 **📥 Read / Pull Shared Repos**
-   载入全部论文。否则用 **📦 Clone / Init** 创建自己的私有仓库或克隆别人共享的仓库。单人使用无需任何仓库。
+2. **Step 2 · Private Shared Repo & Team Sync (recommended for teams):** paste a team repo's URL in
+   `remote_url` and **💾 Save**: it is cloned next to the radar (`../<repo name>`). Then
+   **📥 Read / Pull Shared Repos** loads every paper; **📦 Clone / Init** creates your own private repo instead
+   (**✨ Create / Init My Private Repo**). **🔄 Full Sync with Primary Repo** pulls and pushes.
+   **🏷️ Share my curated tags & peer radar** (on by default) decides whether your ✅ / ⭐ / 🔬 / pillars go to the
+   repo as `peers/<you>.json`; your 🏷️ text notes go only while "share my 🏷️ notes" is also ticked.
+   **⏰ Friday Schedule** sets the two Friday times (07:00 local update & pull, 12:00 upload) and
+   **⏰ Save & Apply** registers them with your OS. Solo use works without any repo.\
+   **第 2 步 · 私有共享仓库与团队同步（推荐团队使用）**：在 `remote_url` 填写团队仓库地址并保存即自动克隆到
+   `../<仓库名>`；**📥 Read / Pull** 载入全部论文；**📦 Clone / Init** 可创建自己的私有仓库。**🏷️ 共享标签**（默认开启）
+   决定是否把你的标记写入 `peers/<你>.json`。**⏰ 周五计划** 设置周五两个时间（07:00 本地更新并拉取、12:00 上传），
+   **⏰ Save & Apply** 写入系统计划任务。单人使用无需任何仓库。
 3. **Step 3 · Research Pillars & 0-Token Keyword Planner (required):** name 1–9 pillars (a pillar is one
    research direction, e.g. "Pipelined & Ring-Amp ADCs"), add **2–5 anchor DOIs** (papers you love) and a few
    **rough seed words** per pillar, click **🪄 Auto-Plan Keywords, Weights & VIPs (from Anchors + Seeds)**,
@@ -321,6 +353,11 @@ The cockpit's other buttons work any time:
   拉取你的数据仓库和你订阅的所有仓库（从不推送）。
 - **🌐 Fetch New Papers Now:** collects the latest papers from every venue and updates this week's report.\
   抓取所有期刊/会议的最新论文，并更新本周报告。
+- **🔍 Check Updates:** asks GitHub for a new radar version and your shared repos for new commits. The page also
+  checks by itself after it loads (cached 15 minutes; a slow or offline network never holds it up) and shows
+  **🚀 New Radar Version Available → ⬆️ Update Radar Now** or **🔔 Shared Repo Update Available →
+  📥 Pull Updates Now** at the top.\
+  检查 GitHub 上的新版本和共享仓库的新提交；页面加载后也会自动检查，并在顶部显示 🚀 / 🔔 提示与一键按钮。
 
 Only one run happens at a time: a button pressed while another run is going (a scheduled task, a second
 window, a double click) starts nothing and shows that run's output instead.
@@ -567,9 +604,11 @@ Click **✨ Create / Init My Private Repo** in `STARTUP.html` (type `your-name/m
    `IC_PAPER_RADAR_DATA` (marks a data repo: only such clones are ever reset), `.gitattributes`, `README.md`,
    your clean `paper_store_clean_share.sqlite` and `peers/<peer_id>.json`.\
    克隆到 `data_repo_dir`（默认 `../ic-paper-radar-data`），并写入协议文件和你的干净论文库。
-3. It pushes `main` and sets `"data_repo": {"remote_url": "…"}`. On a second computer, the first
-   **🔄 Full Sync** clones it automatically.\
-   推送 `main` 并设置 `remote_url`；在第二台电脑上，第一次 **🔄 Full Sync** 会自动克隆。
+3. It pushes `main` and sets `"data_repo": {"remote_url": "…"}`. On a second computer (or for a colleague
+   with write access), paste that URL in Step 2 → `remote_url` and **💾 Save**: it is cloned into
+   `../<repo name>` and `paths.data_repo_dir` is set. 📥 Read, 🔄 Full Sync and the Friday runs clone it the same
+   way if it is still missing.\
+   推送 `main` 并设置 `remote_url`；在第二台电脑上，在第 2 步填写该地址并保存即自动克隆（Read、Full Sync 和周五任务也会自动克隆）。
 
 **Sharing:** add a collaborator in the repo's GitHub settings. With **write** access they sync the same
 corpus (**🔄 Full Sync**). With **read** access they add your repo to their `"read_repos"` list
@@ -627,8 +666,9 @@ repo, each with its field's icon. Every peer page has a **← Back to My Radar**
 *共同维护一个论文库*
 
 If you and a colleague keep one paper corpus in a shared (private) Git repo whose single file is
-`paper_store_clean_share.sqlite`, connect it in `STARTUP.html` (**📥 Clone & Connect Private Data Repo**
-clones it next to this folder), and **🔄 Full Sync (Pull + Push)** keeps both of you in sync:
+`paper_store_clean_share.sqlite`, connect it in `STARTUP.html` (paste its URL in `remote_url` and Save, or use
+**📥 Clone & Connect Private Data Repo**; either clones it next to this folder), and **🔄 Full Sync (Pull + Push)**
+keeps both of you in sync:
 
 如果你和同事用一个共享（私有）Git 仓库维护同一个论文库，在 `STARTUP.html` 中连接它，然后用
 **🔄 Full Sync (Pull + Push)** 保持双方同步：
@@ -656,9 +696,9 @@ hold the same union of papers.
 ### See each other's radar
 *查看对方的雷达*
 
-The shared `.sqlite` stays clean, but each sync also writes **your radar** next to it as
-`peers/<your id>.json`: your pillar names and, for every paper you curated, its pillar, score, ✅ / ⭐ / 🗄️,
-Si call, 🏷️ note and status. It reads your colleague's file and builds a read-only copy of their dashboard,
+The shared `.sqlite` stays clean, but while **🏷️ Share my curated tags** is on (the default) each sync also
+writes **your radar** next to it as `peers/<your id>.json`: your pillar names and, for every paper you curated,
+its pillar, score, ✅ / ⭐ / 🗄️, Si call and status, plus its 🏷️ note when "share my 🏷️ notes" is ticked. It reads your colleague's file and builds a read-only copy of their dashboard,
 **`output/Peers/DASHBOARD_<id>.html`**, listed in your dashboard's header under **📚 Switch Radar / Repo ▾**.
 It's the same page (search, filters, row details, BibTeX download) with their pillars,
 choices and domain preset (its evidence badges); nothing you click there changes your own radar.
@@ -953,17 +993,26 @@ Collects the last 7 days of papers (Crossref + OpenAlex), scores them, and updat
 
 抓取最近 7 天的新论文并打分，更新本周报告，周五定稿。建议在 `"contact_email"` 填写邮箱以获得更快的 API 响应。
 
-**Easiest:** `STARTUP.html` → Step 2 → **⏰ Friday Schedule** → **⏰ Save & Apply** registers the two Friday
-runs for you (`briefing.py --friday` at `update_time`, `briefing.py --friday-upload` at `upload_time`; Windows
-tasks `IC_Paper_Radar_FridayUpdate` / `IC_Paper_Radar_FridayUpload`, or crontab lines marked
-`# paper-radar:`); the same from a terminal: `python briefing.py --apply-schedule`. If a daily task below also
-runs on Friday, the week is still finalized only once.
+**The Friday schedule** (`config.json` → `"schedule"`, set in `STARTUP.html` → Step 2 → **⏰ Friday Schedule**):
 
-最简单：在 STARTUP.html 第 2 步 ⏰ 周五计划中点 **⏰ Save & Apply**，自动注册两个周五任务。
+| When | Setting (default) | What runs | What it does |
+|---|---|---|---|
+| Friday morning | `auto_update_local`, `update_time` (`07:00`) | `briefing.py --friday` | Pulls your shared repo and `read_repos` (if any), then collects, scores and **finalizes** the weekly report. Nothing is pushed. |
+| Friday morning, by hand | | | You read the report and click ✅ / ⭐ / 🗄️ on the dashboard. |
+| Friday noon | `auto_upload_repo`, `upload_time` (`12:00`) | `briefing.py --friday-upload` | `--sync` (applies 💾 Save Marks files), then `--sync-data-repo`: the clean corpus and, with 🏷️ tag sharing on, your marks go to your private shared repo. |
 
-Run it every morning, unattended:
+**⏰ Save & Apply** (or `python briefing.py --apply-schedule`) registers both with your OS: Windows tasks
+`IC_Paper_Radar_FridayUpdate` / `IC_Paper_Radar_FridayUpload` (they also start when the computer was off at that
+time, and on battery), or crontab lines marked `# paper-radar:` on macOS / Linux. An unticked slot is disabled.
+If a daily task below also runs on Friday, the week is still finalized only once, and a Friday finalize never
+uploads by itself (`"friday_sync"` is no longer read).
 
-每天自动运行（无人值守）：
+**周五计划**：07:00 拉取共享仓库并在本地定稿周报（不上传）；上午在面板上整理标记；12:00 上传干净语料和你的标记。
+在 STARTUP.html 第 2 步点 **⏰ Save & Apply**（或 `python briefing.py --apply-schedule`）写入系统计划任务。
+
+For new papers on the other days too, add a daily run (optional):
+
+如需其他日子也自动抓取新论文，可另加每日任务（可选）：
 
 - **Windows** (Task Scheduler; in 🌐 Virtual Mesh LAN mode the **🖥️ Deployment** card shows ready-made
   commands):
@@ -1047,6 +1096,8 @@ python briefing.py --export-share D:/share/radar.sqlite    # or any path (also: 
 python briefing.py --init-data-repo your-name/my-paper-radar-data   # = ✨ Create / Init My Private Repo
 python briefing.py --pull-data-repo                     # = 📥 Read / Pull Shared Repos
 python briefing.py --sync-data-repo                     # the sync half of 🔄 Full Sync
+python briefing.py --clone-data-repo                    # clone data_repo.remote_url into ../<repo name> if missing
+python briefing.py --friday-upload                      # Friday slot 2: --sync, then --sync-data-repo
 python briefing.py --merge-store classmate.sqlite --peer alice   # bring in someone else's store file
 python briefing.py --adopt-external                     # later: take the ones that fit your pillars
 ```
@@ -1078,7 +1129,8 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `python briefing.py --export-share [DST] [--include-curation]` | Write the clean share copy of your store now (also every Friday) |
 | `python briefing.py --merge-store OTHER.sqlite [--peer NAME]` | Merge someone else's store: fill gaps, new papers as `external` |
 | `python briefing.py --adopt-external` | Move external papers that fit your pillars into your archive |
-| `python briefing.py --sync-data-repo` | Sync with a shared corpus repo: fetch, merge, export, push if the remote gains (also on Fridays) |
+| `python briefing.py --sync-data-repo` | Sync with a shared corpus repo: fetch, merge, export, push if the remote gains (Fridays at `upload_time` via `--friday-upload`) |
+| `python briefing.py --clone-data-repo` | Clone `data_repo.remote_url` into `../<repo name>` if there is no clone yet, and set `paths.data_repo_dir` |
 | `python briefing.py --init-data-repo OWNER/NAME` | Create (with `gh`) or clone your own private data repo, push the protocol files, set `remote_url` |
 | `python briefing.py --pull-data-repo` | Read only: fetch your data repo and every `read_repos` entry, run the domain check, merge only your data repo and repos with `merge_corpus` (no push) |
 | `python briefing.py --plan-keywords "SEEDS; SEEDS"` | 0-token keyword & weight plan from your anchors and seed words (prints it; 🪄 in `STARTUP.html` applies it) |
@@ -1087,6 +1139,12 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `python install.py --setup` | Two optional questions (shared repo URL, e-mail), clone the shared repo, open the Control Center |
 | `python briefing.py --lineage` | Conference ↔ journal links for every catalog paper |
 | `python briefing.py --finalize` | Finalize this week's report now |
+| `python briefing.py --friday` | Friday slot 1: pull the shared repos, then finalize the week (no upload; only once per day) |
+| `python briefing.py --friday-upload` | Friday slot 2: `--sync`, then `--sync-data-repo` |
+| `python briefing.py --apply-schedule` | Register the Friday slots from `config.json` → `schedule` as OS tasks (= ⏰ Save & Apply) |
+| `python briefing.py --check-updates` | Print whether GitHub has a new radar version and your shared repos new commits |
+| `python briefing.py --self-update` | Update the radar code from GitHub (= ⬆️ Update Radar Now; refuses if your own edits are in the way) |
+| `--no-auto-sync` | With a Friday run: don't pull the shared repos first |
 | `--no-claude` | Add to any command: no AI calls |
 | `--dry-run` | Work on a copy of the store, write to `output/_archive/_dryrun/` |
 
@@ -1109,6 +1167,8 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `Start_Radar_GUI.cmd`, `Start_Radar_GUI.command`, `control_center.py` | The Setup & Control Center (`output/STARTUP.html`, `--gui`)<br>控制中心 |
 | `install.ps1`, `install.sh`, `Install_Radar.cmd`, `Install_Radar.command`, `install.py` | One-command installer (Git, Python, clone, setup) and `--doctor`<br>一键安装与环境检查 |
 | `fetcher.py`, `topic.py`, `relations.py`, `pins.py` | Collection, scoring, deep-dives, lineage, pinning |
+| `data_repo.py` | Private shared data repos: clone, pull, sync, peer overlays (`peers/<id>.json`), `read_repos` |
+| `arxiv_source.py` | The optional arXiv feed (`config.json` → `arxiv`) |
 | `catalog.py`, `html_renderer.py`, `curation.py` | Master table, BibTeX, dashboard, ✅/⭐/🗄️ marks |
 | `store.py`, `paths.py`, `env_guard.py` | Paper store, output paths (`./output`), portable mode |
 | `vpn_checker.py` | Optional campus-VPN check for your own institution (`--require-vpn`, `--fetch-pdf`; set up in `config.json` → `vpn`) |
@@ -1289,4 +1349,8 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
 | `STARTUP.html` shows **⚪ Static** and the buttons only show commands | It was opened as a file: start `Start_Radar_GUI.cmd` / `.command` (or `python briefing.py --gui`) |
 | macOS: "Start_Radar_GUI.command can't be opened" | Right-click → Open once; if it isn't executable, run `chmod +x Start_Radar_GUI.command` |
 | Not sure what's missing or broken | `python install.py --doctor` (Windows: `py -3 install.py --doctor`) lists each check with its fix |
+| PowerShell: `ParserError: Unexpected token` after a quoted path such as `"C:\Program Files\Python312\python.exe" briefing.py` | PowerShell reads a line starting with `"…"` as text. Put `& ` in front: `& "C:\Program Files\Python312\python.exe" briefing.py …` (or just use `py -3 briefing.py …`) |
+| ⏰ Save & Apply: `FAILED … Access is denied` | That task was created from an Administrator terminal, so Windows only lets an Administrator change it. Run once in an Administrator PowerShell, in the radar folder: `py -3 briefing.py --apply-schedule` |
+| ⬆️ Update Radar Now: "not updated: local changes or local commits are in the way" | You edited the code. `git status` shows what; `git stash`, update, then `git stash pop` (or keep your version). Nothing was changed |
+| The 🔔 / 🚀 banner doesn't appear, or 🔍 Check Updates says "GitHub not reachable" | Offline, behind a proxy, or Git can't sign in to a private repo (sign in once with a 📥 Read). The radar works the same without it |
 | Full Sync: `Please tell me who you are` (older versions) | Update; the sync now commits as your `peer_id` when Git has no name/e-mail set |
