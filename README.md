@@ -1255,7 +1255,7 @@ own a domain**:
 
 | Contributor | Contribution |
 |---|---|
-| **[@Daidingxx](https://github.com/Daidingxx)** | PR #2: the optional arXiv feed (`arxiv_source.py`, merged as `2b1d73f`), and the first peer radar on the shared corpus |
+| **[@Daidingxx](https://github.com/Daidingxx)** | PR #2: the optional arXiv feed (`arxiv_source.py`, merged as `2b1d73f`); PR #3: found and diagnosed the Python 3.11 `SyntaxError` (a 3.12-only f-string), which led to the v3.0.9 Python 3.8+ fix; and the first peer radar on the shared corpus |
 | **[@jdong-p](https://github.com/jdong-p)** | Author and maintainer |
 
 <a name="citation"></a>
