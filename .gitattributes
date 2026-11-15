@@ -1,3 +1,5 @@
 # Double-click launchers: Windows needs CRLF, macOS/Linux shell scripts need LF
 *.cmd text eol=crlf
 *.command text eol=lf
+*.sh text eol=lf
+*.ps1 text eol=crlf

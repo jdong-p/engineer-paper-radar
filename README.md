@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.2.0)
+# 📡 Engineer Paper Radar (v3.2.1)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -13,10 +13,16 @@ Engineer Paper Radar 起源于 **IC Paper Radar**（一名博士生为集成电�
 **领域预设**（Domain Presets）让同一引擎服务于 **IC / 电子工程**、**机器人、控制与通用工程**、**生物医学（PubMed /
 bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无需 `pip install`、无需付费 API，配置也不需要 AI 或命令行。
 
-## ✨ What's new in v3.2.0
-*v3.2.0 亮点*
+## ✨ What's new in v3.2.1
+*v3.2.1 亮点*
 
-1. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
+1. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
+   what's missing (Git, Python), clones the radar, asks two optional questions and opens `STARTUP.html`; see
+   [One-command install](#one-command-install). `python install.py --doctor` checks your setup and prints the
+   exact fix for anything missing.\
+   一行命令完成安装：自动安装缺少的 Git / Python、克隆项目、回答两个可选问题并打开 `STARTUP.html`。
+   `python install.py --doctor` 检查环境，并给出缺失项的修复命令。
+2. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
    - `STARTUP.html` tells you when GitHub has a **new radar version** (🚀 … **⬆️ Update Radar Now**: a
      `git pull`; a ZIP copy is turned into a Git clone and keeps your `config.json`, store and `output/`) and
      when a teammate pushed to your **shared repo** (🔔 … **📥 Pull Updates Now**). The dashboard shows a quiet
@@ -33,7 +39,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `output/`）以及共享仓库的新提交（📥 一键拉取）。在第 2 步填写 `remote_url` 并保存即自动克隆。**⏰ 周五计划**：
    07:00 拉取并在本地生成周报，12:00 上传干净语料和你周五上午的标记，时间可调，**⏰ Save & Apply** 写入系统计划任务。
    取消勾选 **🏷️ 共享标签** 后，下次同步会从共享仓库删除你的 `peers/<id>.json`，干净论文照常同步。
-2. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+3. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
@@ -42,7 +48,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    DOIs can be pasted several at once, one per line or comma-separated. The Quick Start below now starts from `git clone`.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。快速开始改为从 `git clone` 开始。
-3. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+4. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
    folder (`git pull`) and it runs.
@@ -53,21 +59,21 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
    只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-4. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+5. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-5. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+6. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-6. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+7. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-7. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+8. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
 ### The v3.0 foundation (v3.0.2)
@@ -118,6 +124,57 @@ same Git lets your team share one private paper corpus. Everything after that is
 
 请用 **`git clone`** 获取本项目，而不是 GitHub 的 *Download ZIP*：克隆的副本只需 `git pull` 即可更新，同样的 Git
 也让团队共享同一个私有论文库。之后的一切都在浏览器中点按钮完成，无需手写 `config.json`，也不需要 AI 助手。
+
+<a name="one-command-install"></a>
+### ⚡ One-command install (Windows PowerShell & macOS / Linux Terminal)
+*一行命令安装（Windows PowerShell 与 macOS / Linux 终端）*
+
+**Windows** (PowerShell; open it from the Start menu):
+
+```powershell
+irm https://raw.githubusercontent.com/jdong-p/engineer-paper-radar/main/install.ps1 | iex
+```
+
+**macOS / Linux** (Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jdong-p/engineer-paper-radar/main/install.sh | bash
+```
+
+What it does, step by step (nothing else on your computer is changed):
+
+1. Installs **Git** and **Python 3.12** if they're missing (Windows: `winget`; macOS: Homebrew, or the Command
+   Line Tools dialog), and makes them usable in the same window right away.
+2. Clones the radar into `Documents/engineer-paper-radar` (already there? it runs `git pull`). Another folder:
+   set `RADAR_DIR` first (PowerShell `$env:RADAR_DIR = 'D:\radar'`, Terminal `RADAR_DIR=~/radar`).
+3. Asks two optional questions: the URL of a **private shared repo** a team invited you to (cloned next to the
+   radar as `../<repo name>`), and your **e-mail** for Crossref / OpenAlex. Press Enter to skip either.
+4. Opens the Control Center, `STARTUP.html`, in your browser.
+
+Already have the folder? Double-click **`Install_Radar.cmd`** (Windows) or **`Install_Radar.command`** (macOS)
+inside it for the same steps. Something wrong? Run the **doctor**: it shows ✔ / ⚠ / ✖ for Python, Git, the
+folder, the network and the optional extras, with the exact command that fixes each problem:
+
+```bash
+python install.py --doctor        # Windows: py -3 install.py --doctor
+```
+
+The Claude CLI and an IEEE API key are **optional**: the free 0-token mode works out of the box.
+Want to read the installer before running it? Open
+[install.ps1](install.ps1) / [install.sh](install.sh) / [install.py](install.py), or set `RADAR_DRY_RUN=1`
+to only print what it would do.
+
+1. 自动安装缺少的 **Git** 和 **Python 3.12**（Windows 用 `winget`，macOS 用 Homebrew 或命令行工具），并在当前窗口立即生效。
+2. 将项目克隆到 `Documents/engineer-paper-radar`（已存在则 `git pull`；可用 `RADAR_DIR` 指定其他文件夹）。
+3. 询问两个可选问题：团队私有共享仓库的地址（自动克隆到 `../<仓库名>`）和用于 Crossref / OpenAlex 的邮箱，回车即可跳过。
+4. 在浏览器中打开控制中心 `STARTUP.html`。
+
+已有项目文件夹？双击其中的 **`Install_Radar.cmd`**（Windows）或 **`Install_Radar.command`**（macOS）。遇到问题时运行
+`python install.py --doctor`，它会逐项检查并给出修复命令。Claude CLI 和 IEEE API Key 均为**可选**，免费的 0-Token 模式开箱即用。
+
+**Prefer to do it by hand?** The manual steps below do the same with three `git` / `python` lines.
+
+**想手动安装？** 下面的手动步骤用三行 `git` / `python` 命令完成同样的事。
 
 ### Step 1: Install Git and Python, clone, launch
 *第一步：安装 Git 和 Python，克隆，启动*
@@ -1026,6 +1083,8 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `python briefing.py --pull-data-repo` | Read only: fetch your data repo and every `read_repos` entry, run the domain check, merge only your data repo and repos with `merge_corpus` (no push) |
 | `python briefing.py --plan-keywords "SEEDS; SEEDS"` | 0-token keyword & weight plan from your anchors and seed words (prints it; 🪄 in `STARTUP.html` applies it) |
 | `python briefing.py --gui [PORT]` | Setup & Control Center in your browser (`Start_Radar_GUI.cmd` / `.command` do the same) |
+| `python install.py --doctor` | Environment health report (Python, Git, folder, network, optional extras) with fix commands |
+| `python install.py --setup` | Two optional questions (shared repo URL, e-mail), clone the shared repo, open the Control Center |
 | `python briefing.py --lineage` | Conference ↔ journal links for every catalog paper |
 | `python briefing.py --finalize` | Finalize this week's report now |
 | `--no-claude` | Add to any command: no AI calls |
@@ -1048,6 +1107,7 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `retire.py` | 🏺 Retire as Antique: pillars (`--retire-pillar`) and topic dives (`--retire-topic`), nothing lost |
 | `run_lock.py` | One run at a time: `.run.lock` and `.run.log` (not in Git)<br>运行锁 |
 | `Start_Radar_GUI.cmd`, `Start_Radar_GUI.command`, `control_center.py` | The Setup & Control Center (`output/STARTUP.html`, `--gui`)<br>控制中心 |
+| `install.ps1`, `install.sh`, `Install_Radar.cmd`, `Install_Radar.command`, `install.py` | One-command installer (Git, Python, clone, setup) and `--doctor`<br>一键安装与环境检查 |
 | `fetcher.py`, `topic.py`, `relations.py`, `pins.py` | Collection, scoring, deep-dives, lineage, pinning |
 | `catalog.py`, `html_renderer.py`, `curation.py` | Master table, BibTeX, dashboard, ✅/⭐/🗄️ marks |
 | `store.py`, `paths.py`, `env_guard.py` | Paper store, output paths (`./output`), portable mode |
@@ -1152,7 +1212,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.2.0},
+  version   = {3.2.1},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}
@@ -1228,4 +1288,5 @@ The shared corpus (`--sync-data-repo`) lives in a separate repo and isn't affect
 | A 🏷️ note or click didn't reach `MASTER_TABLE.md` | 💾 Save Marks on the dashboard, then any run (or `python briefing.py --sync`) |
 | `STARTUP.html` shows **⚪ Static** and the buttons only show commands | It was opened as a file: start `Start_Radar_GUI.cmd` / `.command` (or `python briefing.py --gui`) |
 | macOS: "Start_Radar_GUI.command can't be opened" | Right-click → Open once; if it isn't executable, run `chmod +x Start_Radar_GUI.command` |
+| Not sure what's missing or broken | `python install.py --doctor` (Windows: `py -3 install.py --doctor`) lists each check with its fix |
 | Full Sync: `Please tell me who you are` (older versions) | Update; the sync now commits as your `peer_id` when Git has no name/e-mail set |
