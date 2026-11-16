@@ -275,6 +275,24 @@ function setNote(doi, note) {
   persist(); refreshBars(); if (window.onMarkChange) window.onMarkChange(doi);
   if (LIVE) flush(); else autoWriteFile();
 }
+// v3.4.0: ✨ AI Refine — one full Claude digest for this paper (radar server → /api/run refine → briefing.py --refine)
+function refineLine(p) {
+  if (!p.dsrc) return '';
+  const conf = p.dconf != null ? ` · draft confidence ${Number(p.dconf).toFixed(2)}` : '';
+  const btn = (RO || /✨|🤖/.test(p.dsrc)) ? '' : ` <button class="refine" data-refine="${p.doi}" onclick="refine(this)" ` +
+    `title="A full Claude digest for this paper (about 1,000 tokens)">✨ AI Refine</button>`;
+  return `<p class="muted small">${p.dsrc}${conf}${btn}</p>`;
+}
+async function refine(b) {
+  const doi = b.dataset.refine;
+  if (!LIVE) { b.replaceWith(Object.assign(document.createElement('code'), {textContent: 'python briefing.py --refine ' + doi})); return; }
+  b.disabled = true; b.textContent = '⏳ refining…';
+  try {
+    const r = await (await fetch(LIVE + '/api/run', {method: 'POST', headers: hdr(), body: JSON.stringify({action: 'refine', doi})})).json();
+    b.textContent = r.ok ? '⏳ running: reload the page in about a minute' : '❌ ' + (r.already_running ? 'the radar is busy, try again later' : r.error);
+    if (!r.ok) b.disabled = false;
+  } catch (e) { b.textContent = '❌ the radar server did not answer'; b.disabled = false; }
+}
 function noteState(doi) {
   if (nstore[doi]) return LIVE ? '⏳ saving…' : '🟡 queued (offline)';
   return noteOf(doi) ? (LIVE ? '✓ saved' : '✓') : '';
@@ -640,6 +658,11 @@ def paper_records(store, cfg, dives=None):
     return [_record(p, cfg, kwmap, keys, in_topic) for p in sorted(pool.values(), key=lambda p: p["doi"])]
 
 
+DIGEST_SRC = {"draft": "🧮 0-token draft", "draft-queued": "🧮 0-token draft (🔍 audit queued)",
+              "audit-pass": "🔍 draft confirmed by Claude's audit", "audit-patch": "🔍 draft corrected by Claude's audit",
+              "refine": "✨ AI Refined (full Claude digest)", "claude": "🤖 Claude digest"}
+
+
 def _record(p, cfg, kwmap, keys, in_topic):
     """One paper as page data (the dashboard and the peer pages); its BibTeX key is made unique within `keys`."""
     key = catalog.bib_key(p, keys)
@@ -660,7 +683,10 @@ def _record(p, cfg, kwmap, keys, in_topic):
         "core": p.get("status") in ("candidate", "reported", "pinned") or bool(p.get("pin")),
         "topics": in_topic.get(p["doi"], []), "key": catalog.key_numbers(p),
         "hits": [h for h in p.get("hits") or [] if h not in ("silicon_verified", "simulation_only")][:10],
-        "digest_html": md_to_html(digest) if digest else "<p class='muted'>No digest yet.</p>",
+        "digest_html": md_to_html(digest) if digest else "<p class='muted'>No digest yet: a 🧮 draft is written when it joins the radar, or ✨ AI Refine writes one now.</p>",
+        # v3.4.0: where the digest came from (drafter.py): 🧮 0-token draft, 🔍 audited draft, ✨ refined, or Claude
+        "dsrc": DIGEST_SRC.get(p.get("digest_src") or ("claude" if digest else ""), ""),
+        "dconf": p.get("draft_conf"),
         "lineage_html": "".join(f"<p>📈 <strong>{'Extended from' if l['type'] == 'journal_extension_of' else 'Journal extension'}"
                                 f" {html.escape(str(l['venue']))} {l.get('year') or ''}:</strong> "
                                 f"<a href='https://doi.org/{l['doi']}'>{html.escape(l['title'])}</a> "
@@ -1042,7 +1068,7 @@ function rowHtml(p) {
       `click to cycle ${BADGE.si_icon} ${esc(BADGE.si)} → ${BADGE.sim_icon} ${esc(BADGE.sim)} → automatic (${esc(p.silicon_auto)})</p>` +
       `<p class="muted noteline">🏷️ Tech note: <input class="note" data-doi="${p.doi}" value="${escA(note)}" maxlength="200" ${RO?'readonly':''} ` +
       `placeholder="Key technique / takeaway (e.g. gate-leakage PTAT, floating inverter amp)…" onkeydown="noteKey(event, this)" ` +
-      `onblur="saveNote(this)"> <span class="nstate" data-nstate="${p.doi}">${noteState(p.doi)}</span></p>${p.lineage_html}${p.digest_html}` +
+      `onblur="saveNote(this)"> <span class="nstate" data-nstate="${p.doi}">${noteState(p.doi)}</span></p>${p.lineage_html}${refineLine(p)}${p.digest_html}` +
       `<details><summary class="muted">Abstract · hits · BibTeX</summary><p>${esc(p.abstract)||'<span class=muted>No abstract.</span>'}</p>` +
       `<p class="muted">${p.hits.map(h=>'<span class=tag>'+esc(h)+'</span>').join('')}</p><pre>${esc(p.bib)}</pre></details></td></tr>` : '';
     return main + det;

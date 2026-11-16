@@ -8,12 +8,13 @@ abstract: >-
   (keywords, VIP authors, anchors, bibliographic coupling and a personal taste model), flags
   measured-silicon or wet-lab evidence against simulation-only work, builds an interactive dashboard
   and weekly reports, and lets collaborators federate a shared corpus through user-owned private Git
-  data repos. Formerly IC Paper Radar; domain presets cover IC/ECE, general engineering and robotics,
+  data repos. Paper digests are drafted locally at 0 tokens, with an optional minimal-token LLM audit.
+  Formerly IC Paper Radar; domain presets cover IC/ECE, general engineering and robotics,
   biomedicine and chemistry/materials. Contributors: Daidingxx (arXiv source connector).
 authors:
   - alias: jdong-p
-version: 3.3.3
-date-released: "2026-11-14"
+version: 3.4.0
+date-released: "2026-11-16"
 license: MIT
 repository-code: "https://github.com/jdong-p/engineer-paper-radar"
 url: "https://github.com/jdong-p/engineer-paper-radar"

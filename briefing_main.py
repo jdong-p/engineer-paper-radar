@@ -24,7 +24,11 @@ papers become `reported` and never appear again.
   --fetch-pdf     check your campus VPN; down → popup + banner, today's top papers go to the PDF queue
   --auto-degrade  kept for old command lines; same as the default
   --dry-run       work on a copy of the store, write to IC_Paper_Radar\\_archive\\_dryrun\\
-  --no-claude     0 tokens: no digests / synthesis
+  --no-claude     0 tokens: 🧮 0-token draft digests only (= --claude-mode draft), no synthesis
+  --claude-mode draft|hybrid|full   v3.4.0 (drafter.py): 🧮 drafts only · 🔍 drafts + a minimal haiku audit of the
+                  uncertain ones (default, config claude.mode) · 🤖 a full Claude digest for every new paper
+  --refine DOI    ✨ AI Refine: a full Claude digest for this one paper now
+  --draft-eval    0 tokens: drafts vs the stored en-v3 digests (accuracy, routing, token estimate); changes nothing
 Reports are always in English (ground rule).
 """
 
@@ -51,6 +55,7 @@ import arxiv_source
 import catalog
 import curation
 import data_repo
+import drafter
 import fetcher
 import html_renderer
 import pins
@@ -169,12 +174,13 @@ def claude_available(cfg):
     return shutil.which(cfg["claude"]["command"]) is not None
 
 
-def claude(prompt, cfg):
+def claude(prompt, cfg, model=None):
+    """One `claude -p` call (no tools, no MCP). model: e.g. 'haiku' for the 🔍 audit (claude.audit_model)."""
     cc = cfg["claude"]
     prompt = presets.adapt_prompt(prompt.replace(PILLARS, pillars_text(cfg)), cfg)  # ic_ece: unchanged
     cmd = [cc["command"], "-p", "--output-format", "text", "--tools", "", "--strict-mcp-config"]
-    if cc.get("model"):
-        cmd += ["--model", cc["model"]]
+    if model or cc.get("model"):
+        cmd += ["--model", model or cc["model"]]
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=cc["timeout_s"], cwd=HERE, shell=(sys.platform == "win32"))
     if r.returncode != 0 or not r.stdout.strip():
@@ -188,16 +194,18 @@ def _precursor(p):
             "abstract": link.get("abstract") or "(not available)"} if link else None
 
 
-def _run_digests(todo, prompt, ver, payload_fn, store, cfg, log, what):
+def _run_digests(todo, prompt, ver, payload_fn, store, cfg, log, what, src="claude"):
     if not todo:
         return 0
     log(f"Calling claude -p to digest {len(todo)} {what} ...")
-    out = claude(prompt.format(papers=json.dumps([payload_fn(p) for p in todo], ensure_ascii=False, indent=1)), cfg)
+    text = prompt.format(papers=json.dumps([payload_fn(p) for p in todo], ensure_ascii=False, indent=1))
+    out = claude(text, cfg)
+    _ledger(store, "full", len(todo), len(text), len(out))
     parts = re.split(r"^=== *(\S+?) *===\s*$", out, flags=re.M)
     got = {parts[i].lower(): parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
     for p in todo:
         if got.get(p["doi"]):
-            store.update(p["doi"], {"digest": got[p["doi"]], "digest_ver": ver})
+            store.update(p["doi"], {"digest": got[p["doi"]], "digest_ver": ver, "digest_src": src, "draft_conf": None})
     missing = [p["doi"] for p in todo if not got.get(p["doi"])]
     if missing:
         log(f"  digest missing for {missing} (retried next run)")
@@ -212,31 +220,259 @@ def _digest_payload(p):
     return d
 
 
-def digest_new(store, cfg, week, today, log):
-    """Digest candidates of this week that have no current digest. Cached: never repeated
-    (a newly found conference precursor resets the cache so the lineage & delta bullet is added)."""
-    todo = [p for p in store.where("status='candidate' AND week=? AND grp='ieee'", (week,))
-            if not digest_done(p, cfg)
-            and (p.get("abstract") or (today - date.fromisoformat(p["first_seen"])).days >= 2)]  # wait 2 days for an abstract
+def claude_mode(cfg, a=None):
+    """v3.4.0: 'draft' (🧮 0 tokens) | 'hybrid' (🔍 drafts + minimal audit) | 'full' (🤖 en-v3 for every paper).
+    --claude-mode beats --no-claude (= draft), which beats config.json claude.mode (default hybrid)."""
+    if a is not None and getattr(a, "claude_mode", None):
+        return a.claude_mode
+    if a is not None and getattr(a, "no_claude", False):
+        return "draft"
+    return drafter.effective_mode(cfg)
+
+
+def digest_ok(p, cfg, mode):
+    """A digest a run keeps as it is (preset-aware, digest_done); in Full mode a draft or audit is upgraded."""
+    return digest_done(p, cfg) or (mode != "full" and p.get("digest_ver") == drafter.AUDIT_VER)
+
+
+def _ledger(store, kind, papers, chars_in=0, chars_out=0):
+    """Per day: drafts final at 0 tokens, audited papers, full digests, and their prompt/answer size (≈ chars / 4
+    tokens), for STARTUP.html's 🔑 Claude AI line and --draft-eval. Kept 60 days."""
+    day = date.today().isoformat()
+    led = store.meta("digest_ledger") or {}
+    d = led.setdefault(day, {})
+    d[kind] = d.get(kind, 0) + papers
+    d[kind + "_tok_in"] = d.get(kind + "_tok_in", 0) + chars_in // 4
+    d[kind + "_tok_out"] = d.get(kind + "_tok_out", 0) + chars_out // 4
+    store.meta("digest_ledger", {k: led[k] for k in sorted(led)[-60:]})
+
+
+def highlights(store, cfg, week):
+    """R3: this run's top N candidates by score (claude.highlights_per_run, default 3), plus pinned anchors, VIP-author
+    papers and ⭐ Cite: their drafts are always audited in Hybrid mode."""
+    n = drafter.settings(cfg)["highlights_per_run"]
+    cands = sorted(store.where("status='candidate' AND week=? AND grp='ieee'", (week,)), key=lambda p: -(p["score"] or 0))
+    out = {p["doi"] for p in cands[:n]}
+    out |= {p["doi"] for p in store.where("grp='ieee' AND (pin='anchor' OR COALESCE(cited,0)=1)")}
+    out |= {p["doi"] for p in cands if any(str(h).startswith("vip_author:") for h in p.get("hits") or [])}
+    return out
+
+
+def digest_papers(todo, store, cfg, log, mode, hl=frozenset()):
+    """🧮 Draft every paper in `todo` (0 tokens); in Hybrid mode send the routed ones (drafter.route) to one
+    batched 🔍 audit call, highlights first, then the lowest confidence, at most claude.audits_per_day_max.
+    A paper whose audit is missing or capped keeps its draft (digest_src 'draft-queued') and is retried next run."""
+    s = drafter.settings(cfg)
+    queue, final, new = [], 0, 0
+    for p in todo:
+        pre = _precursor(p)
+        d = drafter.draft(p, cfg, pre)
+        r, rule = drafter.route(d, cfg, p["doi"] in hl)
+        audit = mode == "hybrid" and r != "final"
+        src = "draft-queued" if audit else "draft"
+        if (p.get("digest"), p.get("digest_ver"), p.get("digest_src")) != (d["md"], drafter.DRAFT_VER, src):
+            new += 1  # a draft that is redone unchanged (each run re-routes the drafts) isn't counted or rewritten
+            store.update(p["doi"], {"digest": d["md"], "digest_ver": drafter.DRAFT_VER, "draft_conf": d["conf"],
+                                    "digest_src": src})
+            final += not audit
+        if audit:
+            queue.append((p, d, r, rule, pre))
+    if final:
+        _ledger(store, "draft", final)
+    if new or queue:
+        log(f"🧮 Drafts (0 tokens): {new} new or changed, {final} final"
+            + (f", {len(queue)} for the 🔍 audit" if queue else ""))
+    if not queue:
+        return len(todo)
+    queue.sort(key=lambda x: (x[0]["doi"] not in hl, x[1]["conf"]))
+    batch, later = queue[:s["audits_per_day_max"]], queue[s["audits_per_day_max"]:]
+    if later:
+        log(f"  {len(later)} audit(s) over claude.audits_per_day_max: they keep their draft until the next run")
+    items = [drafter.audit_payload(p, d, r, pre) for p, d, r, rule, pre in batch]
+    prompt = drafter.audit_prompt(items, cfg)
+    rules = ", ".join(f"{k}×{v}" for k, v in sorted(_count(x[3] for x in batch).items()))
+    log(f"Calling claude -p --model {s['audit_model']} to audit {len(batch)} drafts ({rules}) ...")
+    try:
+        out = claude(prompt, cfg, model=s["audit_model"])
+    except Exception as e:
+        log(f"  audit failed (drafts kept, retried next run): {e}")
+        return len(todo)
+    got = drafter.parse_audit(out)
+    n_pass = n_patch = 0
+    dropped_all = []
+    for p, d, r, rule, pre in batch:
+        ans = got.get(p["doi"].lower())
+        if not ans:
+            continue
+        if ans["verdict"] == "PASS":
+            n_pass += 1
+            src = "audit-pass"
+        else:
+            d, dropped = drafter.apply_audit(d, ans, p.get("abstract") or "", cfg, (pre or {}).get("abstract") or "")
+            dropped_all += [f"{p['doi']}:{k}" for k in dropped]
+            n_patch += 1
+            src = "audit-patch"
+        store.update(p["doi"], {"digest": d["md"], "digest_ver": drafter.AUDIT_VER, "digest_src": src})
+    _ledger(store, "audit", n_pass + n_patch, len(prompt), len(out))
+    missing = len(batch) - n_pass - n_patch
+    log(f"  🔍 audit: {n_pass} PASS, {n_patch} PATCH" + (f", {missing} missing (retried next run)" if missing else "")
+        + f" · ~{len(prompt) // 4:,} input / ~{len(out) // 4:,} output tokens (est.)")
+    if dropped_all:
+        log(f"  patch fields rejected (number not in the abstract, or unknown key): {', '.join(dropped_all[:8])}")
+    return len(todo)
+
+
+def _count(xs):
+    c = {}
+    for x in xs:
+        c[x] = c.get(x, 0) + 1
+    return c
+
+
+def digest_new(store, cfg, week, today, log, mode="full"):
+    """Digest candidates of this week (and pinned papers) that have no current digest. Cached: never repeated
+    (a newly found conference precursor resets the cache so the lineage & delta bullet is added).
+    v3.4.0: Full = en-v3 for ≤ digests_per_day_max papers (the rest get a 🧮 draft meanwhile); Hybrid = drafts +
+    one minimal 🔍 audit call; Draft = drafts only. Every mode then drafts catalog papers that still have no digest."""
+    cands = [p for p in store.where("status='candidate' AND week=? AND grp='ieee'", (week,))
+             if not digest_ok(p, cfg, mode)]
     # pinned papers (anchors, --add) last: the catalog shows them, the weekly report doesn't
-    todo += [p for p in store.where("status='pinned' AND grp='ieee'") if not digest_done(p, cfg)
-             and (p.get("abstract") or (today - date.fromisoformat(p["first_seen"])).days >= 2)]
-    todo = sorted(todo, key=lambda p: (p["status"] == "pinned", bool(p.get("catchup")), -p["score"]))[
-        :cfg["digests_per_day_max"]]  # new first
-    n = _run_digests(todo, DIGEST_PROMPT, prompt_ver(cfg), _digest_payload, store, cfg, log, "IEEE papers")
-    n += digest_beyond(store, cfg, log)
+    cands += [p for p in store.where("status='pinned' AND grp='ieee'") if not digest_ok(p, cfg, mode)]
+    # wait 2 days for an abstract before a Claude digest (R1); a draft is written meanwhile and redone when it comes
+    ready = [p for p in cands if p.get("abstract") or (today - date.fromisoformat(p["first_seen"])).days >= 2]
+    ready = sorted(ready, key=lambda p: (p["status"] == "pinned", bool(p.get("catchup")), -p["score"]))  # new first
+    n = 0
+    if mode == "full":
+        todo = ready[:cfg["digests_per_day_max"]]
+        n = _run_digests(todo, DIGEST_PROMPT, prompt_ver(cfg), _digest_payload, store, cfg, log, "IEEE papers")
+        done = {p["doi"] for p in todo}
+        rest = [p for p in cands if p["doi"] not in done and not p.get("digest")]
+        digest_papers(rest, store, cfg, log, "draft")  # no blank card while a paper waits for its turn
+    else:
+        hl = highlights(store, cfg, week) if mode == "hybrid" else frozenset()
+        waiting = [p for p in cands if p not in ready]
+        digest_papers(waiting, store, cfg, lambda m: None, "draft")  # title-only drafts, routed once the abstract comes
+        n = digest_papers(ready, store, cfg, log, mode, hl)
+    n += digest_beyond(store, cfg, log, mode)
+    draft_backfill(store, cfg, log)
     return n
 
 
-def digest_beyond(store, cfg, log):
-    """Every paper on the Beyond-IEEE board without a digest (≤ board_size, so one call)."""
+def draft_backfill(store, cfg, log):
+    """🧮 A 0-token draft for every catalog paper (candidate, reported, pinned, ✅ selected, ⭐ cited) that has no
+    digest at all, so the dashboard never shows 'No digest yet' (✨ AI Refine upgrades one on request)."""
+    rows = [p for p in store.where("grp='ieee' AND COALESCE(digest,'')='' AND (status IN ('candidate','reported','pinned') "
+                                   "OR user_mark='selected' OR COALESCE(cited,0)=1)")]
+    for p in rows:
+        d = drafter.draft(p, cfg, _precursor(p))
+        store.update(p["doi"], {"digest": d["md"], "digest_ver": drafter.DRAFT_VER, "draft_conf": d["conf"],
+                                "digest_src": "draft"})
+    if rows:
+        _ledger(store, "draft", len(rows))
+        log(f"🧮 Backfill: {len(rows)} catalog paper(s) without a digest got a 0-token draft")
+    return len(rows)
+
+
+def digest_beyond(store, cfg, log, mode="full"):
+    """Every paper on the Beyond-IEEE board without a digest (≤ board_size, so one call). Hybrid keeps this full
+    Claude digest (few papers, narrative abstracts); Draft mode writes a 0-token draft instead."""
     todo = [p for p in store.where("grp='beyond' AND status IN ('candidate','reported') AND "
                                    "COALESCE(user_mark,'normal')='normal' AND COALESCE(cited,0)=0")
             if str(p.get("digest_ver") or "").split("+")[0] != BEYOND_VER]
-    return _run_digests(todo, BEYOND_PROMPT, prompt_ver(cfg, BEYOND_VER),
-                        lambda p: {"doi": p["doi"], "title": p["title"], "venue": p["venue_name"],
-                                   "abstract": p.get("abstract") or "(no abstract available — title only)"},
-                        store, cfg, log, "Beyond-IEEE papers")
+    if mode == "draft":
+        todo = [p for p in todo if not p.get("digest")]
+        for p in todo:
+            store.update(p["doi"], {"digest": drafter.draft_beyond(p, cfg), "digest_ver": drafter.DRAFT_VER,
+                                    "digest_src": "draft", "draft_conf": None})
+        return len(todo)
+    return _run_digests(todo, BEYOND_PROMPT, prompt_ver(cfg, BEYOND_VER), _beyond_payload, store, cfg, log, "Beyond-IEEE papers")
+
+
+def _beyond_payload(p):
+    return {"doi": p["doi"], "title": p["title"], "venue": p["venue_name"],
+            "abstract": p.get("abstract") or "(no abstract available — title only)"}
+
+
+def refine(store, cfg, needle, log=print):
+    """✨ AI Refine (v3.4.0): today's full Claude digest (en-v3, or beyond-v1 on the Beyond board) for one paper."""
+    p = store.get(needle.strip().lower())
+    if not p:
+        log(f"--refine: no paper with DOI {needle!r} in the store")
+        return 1
+    if p.get("grp") == "beyond":
+        n = _run_digests([p], BEYOND_PROMPT, prompt_ver(cfg, BEYOND_VER), _beyond_payload, store, cfg, log, "Beyond-IEEE paper", "refine")
+    else:
+        n = _run_digests([p], DIGEST_PROMPT, prompt_ver(cfg), _digest_payload, store, cfg, log, "paper (✨ AI Refine)", "refine")
+    log(f"✨ AI Refine: {'done' if n else 'no digest in the answer (try again)'}: {p['title'][:90]}")
+    return 0 if n else 1
+
+
+def draft_eval(store, cfg, log=print):
+    """--draft-eval (0 tokens, changes nothing): 🧮 drafts of every IEEE paper with an en-v3 digest and an abstract,
+    compared with Claude's digest; the routing of each, a final-threshold sweep and a token estimate."""
+    rows = [p for p in store.where("grp='ieee'") if p.get("abstract")
+            and str(p.get("digest_ver") or "").split("+")[0] in (PROMPT_VER, "en-v3")]
+    if not rows:
+        log("--draft-eval: no Claude digests with an abstract in this store (run with Claude first)")
+        return 1
+    recs = drafter.evaluate(rows, cfg, _precursor)
+    n = len(recs)
+
+    def pct(a, b):
+        return f"{a}/{b} ({100 * a / max(b, 1):.0f}%)"
+
+    def summary(rs):
+        return (pct(sum(r["v_ok"] for r in rs), len(rs)),
+                pct(sum(r["num_recall"][0] for r in rs), sum(r["num_recall"][1] for r in rs)),
+                sum(r["rouge"] for r in rs) / max(len(rs), 1))
+    v, rc, rg = summary(recs)
+    log(f"🧮 --draft-eval on {n} papers with an en-v3 digest (0 tokens; Claude's digest = reference)")
+    log(f"  Verification verdict = Claude's: {v}")
+    log(f"  Process node = Claude's:         {pct(sum(r['proc_ok'][0] for r in recs), sum(r['proc_ok'][1] for r in recs))}")
+    log(f"  Metric recall (Claude's numbers that are in the abstract, found by the draft): {rc}")
+    log(f"  Metric grounding (draft numbers that are in the title / abstract): "
+        f"{pct(sum(r['num_prec'][0] for r in recs), sum(r['num_prec'][1] for r in recs))}")
+    log(f"  Pillar = Claude's: {pct(sum(r['pil_ok'] for r in recs), n)} · core sentence ROUGE-1 F vs Claude's: {rg:.2f}")
+    conf = drafter.settings(cfg)
+    log(f"  Routing (final ≥ {conf['draft_final_conf']}, rewrite < {conf['draft_rewrite_conf']}, top {conf['highlights_per_run']} per week audited):")
+    for rule in ("R2", "R3", "R4", "R5", "R6", "R7", "R8"):
+        rs = [r for r in recs if r["route"][1] == rule]
+        if rs:
+            vv, rr, _ = summary(rs)
+            log(f"    {rule} {rs[0]['route'][0]:7s} {len(rs):4d}  verdict ok {vv:14s} metric recall {rr}")
+    log("  Final-threshold sweep (papers that would be final at 0 tokens):")
+    for t in (0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9):
+        c2 = {**cfg, "claude": {**(cfg.get("claude") or {}), "draft_final_conf": t}}
+        fin = [r for r in drafter.evaluate(rows, c2, _precursor) if r["route"][0] == "final"]
+        vv, rr, gg = summary(fin)
+        log(f"    T={t:.2f}  final {pct(len(fin), n):14s} verdict ok {vv:14s} metric recall {rr:16s} ROUGE {gg:.2f}")
+    # token estimate: Full = the en-v3 payload in and the stored digest out; Hybrid = audit payloads in, and out a
+    # PASS line (~12 tokens) or a PATCH (~12 + 20 per field it would fix) or, for R5 / R8, a delta / core (~90)
+    by_doi = {p["doi"]: p for p in rows}
+    batch = max(1, min(cfg.get("digests_per_day_max", 12), 4))  # the radar's runs digest 1–4 papers at a time
+    full_in = len(DIGEST_PROMPT) / 4 / batch * n
+    full_out = 0
+    hy_in, hy_out, audited = 0.0, 0.0, 0
+    for r in recs:
+        p = by_doi[r["doi"]]
+        full_in += len(json.dumps(_digest_payload(p), ensure_ascii=False)) / 4
+        full_out += len(p["digest"]) / 4
+        if r["route"][0] == "final":
+            continue
+        audited += 1
+        d = drafter.draft(p, cfg, _precursor(p))
+        hy_in += len(drafter.audit_payload(p, d, r["route"][0], _precursor(p))) / 4
+        nfix = (not r["v_ok"]) + (r["num_recall"][0] < r["num_recall"][1])
+        hy_out += 12 + 20 * nfix + (90 if r["route"][1] in ("R5", "R8") else 0)
+    hy_in += len(drafter.AUDIT_PROMPT) / 4 / batch * audited
+    w = 5  # an output token weighs ~5 input tokens (speed and usage limits)
+    log(f"  Token estimate for these {n} papers (≈ chars / 4; batches of {batch}; output weighted ×{w}):")
+    log(f"    Full en-v3:   ~{full_in:,.0f} in + ~{full_out:,.0f} out  → weighted ~{full_in + w * full_out:,.0f}")
+    log(f"    Hybrid audit: ~{hy_in:,.0f} in + ~{hy_out:,.0f} out  ({audited} audited, {n - audited} final at 0 tokens)"
+        f"  → weighted ~{hy_in + w * hy_out:,.0f}")
+    log(f"    Saving: input {100 * (1 - hy_in / full_in):.0f}% · output {100 * (1 - hy_out / full_out):.0f}% · "
+        f"weighted {100 * (1 - (hy_in + w * hy_out) / (full_in + w * full_out)):.0f}%")
+    return 0
 
 
 def pillar_line(added):
@@ -541,7 +777,12 @@ def main():
     ap.add_argument("--check-updates", action="store_true", help="print whether GitHub has a new radar version and "
                     "whether the shared repos have new commits")
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--no-claude", action="store_true")
+    ap.add_argument("--no-claude", action="store_true", help="0 tokens: 🧮 draft digests only (= --claude-mode draft)")
+    ap.add_argument("--claude-mode", choices=drafter.MODES, help="v3.4.0: draft (0 tokens) · hybrid (drafts + a minimal "
+                    "haiku audit of the uncertain ones) · full (every new paper digested by Claude); default config claude.mode")
+    ap.add_argument("--refine", metavar="DOI", help="✨ AI Refine: a full Claude digest for this one paper now")
+    ap.add_argument("--draft-eval", action="store_true", help="0 tokens, read only: drafts vs the stored en-v3 digests "
+                    "(accuracy, routing, threshold sweep, token estimate)")
     ap.add_argument("--no-backfill", action="store_true")
     ap.add_argument("--topic", help='on-demand deep-dive, e.g. --topic "sub-100nW sensor design and low-leakage techniques"')
     ap.add_argument("--max-ieee", type=int, help="IEEE calls this --topic run may use (from topic.ieee_topic_reserve)")
@@ -621,8 +862,8 @@ def main():
 
     cfg = fetcher.load_config()
     if (cfg.get("claude") or {}).get("enabled") is False and not a.no_claude:
-        a.no_claude = True  # v3.3.3: STARTUP.html → 🔑 Claude AI → 🧮 0-Token only (config.json claude.enabled = false)
-        print("Claude AI: 🧮 0-Token only (config.json claude.enabled = false): running as --no-claude", flush=True)
+        a.no_claude = True  # legacy v3.3.3 switch; since v3.4.0 STARTUP.html writes it as the mirror of claude.mode = draft
+        print("Claude AI: 🧮 0-Token Draft (config.json claude.enabled = false): running as --no-claude", flush=True)
     if a.plan_keywords is not None:  # v3.0.5, read only: prints the plan (STARTUP.html 🪄 shows it in a preview)
         import keyword_planner
         return keyword_planner.cli(cfg, a.plan_keywords)
@@ -670,7 +911,7 @@ def main():
         ap.error(f"--pillar must be one of {sorted(k for k in catalog.PILLARS if k)} (config.json \"pillars\")")
     if not a.no_claude and not claude_available(cfg):
         print(f"[INFO] '{cfg['claude']['command']}' CLI not found on PATH: running in --no-claude mode (scoring, "
-              "dashboard, master table, --topic and --seed-pillars still work; digests and the synthesis are skipped).")
+              "dashboard, master table, --topic and --seed-pillars still work; digests are 🧮 0-token drafts and the synthesis is skipped).")
         a.no_claude = True
     today = date.today()
     week, friday = fetcher.week_of(today)
@@ -687,6 +928,9 @@ def main():
     if fetcher.store_paper_count(store_path) == 0:  # checked before Store() creates an empty file
         print("\n" + fetcher.STORE_TIP + "\n")
     store = Store(store_path)
+    mode = claude_mode(cfg, a)  # v3.4.0: draft | hybrid | full (drafter.py)
+    if a.draft_eval:
+        return draft_eval(store, cfg)
     if final and not a.finalize and not a.dry_run and store.meta("last_finalize") == today.isoformat():
         final = False  # v3.2.0: the daily task and the Friday slot both run on Friday: finalize only once
         print("This week was already finalized today: a progressive run (use --finalize to finalize again)")
@@ -722,6 +966,13 @@ def main():
         update_index(Path(cfg["paths"]["weekly_dir"]), topic_dir)
         curation.sync_markdown_marks(store, cfg, read_edits=False)  # bring every report's boxes in line
         html_renderer.write_all(store, cfg)  # after the .md boxes are final
+
+    if a.refine:  # ✨ AI Refine (DASHBOARD.html button → /api/run refine, or a terminal)
+        rc = refine(store, cfg, a.refine)
+        if not a.dry_run:
+            html_renderer.write_all(store, cfg)
+        print(f"Done in {time.time() - T0:.1f} s.", flush=True)
+        return rc
 
     if final and not a.dry_run and not a.no_auto_sync and store.meta("friday_pull") != today.isoformat():
         sc = cfg.get("schedule") or {}
@@ -793,7 +1044,7 @@ def main():
     if a.recall:
         topic.recall(a.recall, cfg, store)
     if a.topic:
-        topic.run(a.topic, cfg, store, a.max_ieee, claude, print, use_claude=not a.no_claude)
+        topic.run(a.topic, cfg, store, a.max_ieee, claude, print, use_claude=mode != "draft")
     if a.add or a.seed_pillars is not None or a.pin_anchors:
         print(f"Anchors: {pins.sync_anchors(store, cfg)} pinned as 🏛️ Classic / Anchor")
         if a.pin_anchors and a.pillar:  # v3.0.7: STARTUP.html → ＋ Add New Pillar files its anchors under it
@@ -811,14 +1062,17 @@ def main():
                                          fresh=not a.rescore)
             print("Seed: " + pillar_line(n), flush=True)
             print(f"Beyond pool: {fetcher.pool_search(cfg, store, today)} gate-passing papers searched")
-        if not a.no_claude:
-            try:
-                p = added and store.get(added)
-                # this paper right away if it has an abstract (else the daily queue waits for one, ≤ 2 days)
-                if p and not digest_done(p, cfg) and p.get("abstract"):
+        try:
+            p = added and store.get(added)
+            # this paper right away if it has an abstract (else the daily queue waits for one, ≤ 2 days);
+            # v3.4.0: Hybrid drafts it and audits it (a paper the user pinned is a highlight), Draft only drafts it
+            if p and not digest_ok(p, cfg, mode):
+                if mode == "full" and p.get("abstract"):
                     _run_digests([p], DIGEST_PROMPT, prompt_ver(cfg), _digest_payload, store, cfg, print, "pinned paper")
-            except Exception as e:
-                print(f"Digest failed (retried next run): {e}", file=sys.stderr)
+                else:
+                    digest_papers([p], store, cfg, print, mode if p.get("abstract") else "draft", {p["doi"]})
+        except Exception as e:
+            print(f"Digest failed (retried next run): {e}", file=sys.stderr)
     if a.sync or marks or a.rescore or a.lineage or a.recall or a.topic or a.drop_topic or a.retire_topic \
             or a.unretire_topic or a.retire_pillar or pillar_ops or a.add or a.seed_pillars is not None:
         if a.dry_run:
@@ -830,12 +1084,12 @@ def main():
             refilled = catalog.pillar_replenish(store, cfg, week, fresh=not a.rescore)
             print("Pillar replenish: " + pillar_line(refilled), flush=True)
             print(f"Beyond board: +{fetcher.beyond_replenish(cfg, store, week)} from the pool")
-        if board and not a.no_claude:
+        if board:
             try:  # the board's new papers (and the replenished / seeded IEEE papers, ≤ digests_per_day_max)
                 if refilled or a.seed_pillars is not None:
-                    digest_new(store, cfg, week, today, print)
+                    digest_new(store, cfg, week, today, print, mode)
                 else:
-                    digest_beyond(store, cfg, print)
+                    digest_beyond(store, cfg, print, mode)
             except Exception as e:
                 print(f"Digest failed (retried next run): {e}", file=sys.stderr)
         print("Rebuilding DASHBOARD.html & STARTUP.html…", flush=True)
@@ -870,11 +1124,11 @@ def main():
     n += relations.catalog_lineage(cfg, store, today)  # anchors, pinned, selected, cited, reported (every 30 days)
     print(f"Lineage: {n} new conference ↔ journal links")
 
-    if not a.no_claude:
-        try:
-            digest_new(store, cfg, week, today, print)
-        except Exception as e:
-            print(f"Digest failed (retried next run): {e}", file=sys.stderr)
+    try:  # v3.4.0: every mode; Draft (--no-claude) writes 0-token drafts instead of leaving blanks
+        print(f"Digests: {dict(draft='🧮 0-Token Draft Only', hybrid='🔍 Hybrid Audit', full='🤖 Full Claude')[mode]}")
+        digest_new(store, cfg, week, today, print, mode)
+    except Exception as e:
+        print(f"Digest failed (retried next run): {e}", file=sys.stderr)
 
     allc = sorted(store.where(*ieee_q), key=lambda p: (-p["score"], p["first_seen"]))
     fresh = [p for p in allc if not p.get("catchup")]
@@ -886,7 +1140,7 @@ def main():
     notes.update(relations.week_relations(catch, store)[1])
 
     synth = ""
-    if final and (papers or catch) and not a.no_claude:
+    if final and (papers or catch) and mode != "draft":
         try:
             synth = synthesis(store, cfg, week, papers + catch, beyond, notes, a.finalize, print)
         except Exception as e:

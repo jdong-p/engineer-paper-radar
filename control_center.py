@@ -84,7 +84,9 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "data_repo_dir": ["paths", "data_repo_dir"], "domain_preset": ["domain_preset"], "deployment": ["deployment"],
          "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"], "topic": ["topic"],
          "catch_up_since": ["catch_up", "since"], "venues": ["venues"],  # v3.3.0: Step 1 → 📚 Watched Venues
-         "flagship_venues": ["catch_up", "flagship_venues"], "claude_enabled": ["claude", "enabled"]}
+         "flagship_venues": ["catch_up", "flagship_venues"], "claude_enabled": ["claude", "enabled"],
+         "claude_mode": ["claude", "mode"]}  # v3.4.0: 🔑 Optional boosters → Claude AI (drafter.py)
+CLAUDE_MODES = ("draft", "hybrid", "full")
 TOPIC_KEYS = {"min_year": (0, 2100), "recent_from_year": (1950, 2100), "n_classic": (1, 20), "n_recent": (1, 20)}  # v3.2.3
 DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
 # v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
@@ -240,7 +242,7 @@ def editable(cfg):
            "topic": topic_cfg(cfg), "catch_up_since": str((cfg.get("catch_up") or {}).get("since") or "2025-01-01"),
            "venues": json.loads(json.dumps([v for v in cfg.get("venues") or [] if isinstance(v, dict)])),
            "flagship_venues": list((cfg.get("catch_up") or {}).get("flagship_venues") or []),
-           "claude_enabled": claude_enabled(cfg)}
+           "claude_mode": claude_mode_cfg(cfg)}  # v3.4.0: the one Claude setting (claude.enabled is its mirror)
     if STARTER:
         out["arxiv"] = {k: ax.get(k, False if k in ("enabled", "share") else []) for k in ARXIV_KEYS}
     return out
@@ -325,7 +327,7 @@ def validate(upd, cfg):
                  else len(cfg.get("pillars") or []) if STARTER else len([k for k in catalog.PILLARS if k]))
     for k, v in upd.items():
         if k in STARTER_ONLY and not STARTER:
-            errs.append(f"{k}: fixed on this radar (catalog.py), not editable here")
+            errs.append(f"{k}: a Starter Edition setting, not used on this radar")
         elif k == "pillars":
             def pillars(v=v):
                 names = _texts(v, "pillars", maxn=MAX_PILLARS, maxlen=120, dedupe=False)
@@ -402,6 +404,11 @@ def validate(upd, cfg):
                     errs.append("topic.min_year must not be after the classic / recent split year")
             except (TypeError, ValueError):
                 pass
+        elif k == "claude_mode":  # v3.4.0: claude.enabled is written as its mirror, so the two never contradict
+            if v in CLAUDE_MODES:
+                out += [(PATHS[k], v), (PATHS["claude_enabled"], v != "draft")]
+            else:
+                errs.append(f"claude_mode: one of {', '.join(CLAUDE_MODES)}")
         elif k == "schedule":
             if not isinstance(v, dict):
                 errs.append("schedule: expected an object")
@@ -489,8 +496,18 @@ def validate(upd, cfg):
             import venues as venue_rules
             vlist = upd["venues"] if isinstance(upd.get("venues"), list) else cfg.get("venues")
             put(PATHS[k], lambda v=v, vlist=vlist: venue_rules.check_flagships(v, vlist))
-        elif k == "claude_enabled":  # v3.3.3: 🔑 Claude AI → 🤖 Auto / 🧮 0-Token only
-            put(PATHS[k], lambda v=v: _bool(v, "claude_enabled"))
+        elif k == "claude_enabled":  # legacy v3.3.3 page: false = 🧮 Draft, true = back to the default mode
+            if "claude_mode" in upd:
+                continue
+            try:
+                on = _bool(v, "claude_enabled")
+            except ValueError as e:
+                errs.append(str(e))
+                continue
+            import drafter
+            cur = drafter.effective_mode(cfg)
+            m = "draft" if not on else (cur if cur != "draft" else drafter.DEFAULTS["mode"])
+            out += [(PATHS["claude_mode"], m), (PATHS[k], on)]
         elif k == "domain_preset":
             import presets
             put(PATHS[k], lambda v=v: v if v in presets.PRESETS else _fail(
@@ -895,13 +912,15 @@ def _origin_of(repo):
 
 
 def claude_enabled(cfg):
-    """config.json claude.enabled (v3.3.3): false = 🧮 0-Token only (every run behaves as --no-claude) even with the
+    """config.json claude.enabled (v3.3.3; since v3.4.0 the mirror of claude.mode != draft): false = 🧮 Draft (every run behaves as --no-claude) even with the
     Claude CLI installed; true / missing = 🤖 Auto (Claude when the CLI is there)."""
     return (cfg.get("claude") or {}).get("enabled", True) is not False
 
 
 def claude_on(cfg):
-    return has_claude(cfg) and claude_enabled(cfg)
+    """The CLI is there, Claude is not switched off (v3.3.3 claude.enabled) and the mode is not 🧮 Draft (v3.4.0):
+    otherwise plan() adds --no-claude, which briefing.py treats as Draft."""
+    return has_claude(cfg) and claude_enabled(cfg) and claude_mode_cfg(cfg) != "draft"
 
 
 # ---------- v3.3.3: 🔑 Set / Update Key (write-only) ----------
@@ -996,6 +1015,41 @@ def has_claude(cfg):
     return shutil.which((cfg.get("claude") or {}).get("command") or "claude") is not None
 
 
+def claude_mode_cfg(cfg):
+    """config.json claude.mode (v3.4.0): draft | hybrid | full, resolved by drafter.effective_mode (the legacy
+    claude.enabled = false is draft)."""
+    import drafter
+    return drafter.effective_mode(cfg)
+
+
+def digest_status(cfg):
+    """The 🔑 Claude AI line: mode, and the last 7 days of meta['digest_ledger'] (drafts final at 0 tokens, audited
+    papers, full digests, estimated tokens). Read only."""
+    from datetime import date, timedelta
+    out = {"mode": claude_mode_cfg(cfg), "days": 0, "draft": 0, "audit": 0, "full": 0, "tok_audit": 0, "tok_full": 0}
+    sp = HERE / cfg["paths"]["store_file"]
+    if not sp.exists():
+        return out
+    try:
+        c = _ro(sp)
+        try:
+            r = c.execute("SELECT value FROM meta WHERE key='digest_ledger'").fetchone()
+        finally:
+            c.close()
+        led = json.loads(r[0]) if r and r[0] else {}
+    except (sqlite3.Error, ValueError):
+        return out
+    since = (date.today() - timedelta(days=6)).isoformat()
+    for day, d in led.items():
+        if day >= since:
+            out["days"] += 1
+            for k in ("draft", "audit", "full"):
+                out[k] += d.get(k, 0)
+            out["tok_audit"] += d.get("audit_tok_in", 0) + d.get("audit_tok_out", 0)
+            out["tok_full"] += d.get("full_tok_in", 0) + d.get("full_tok_out", 0)
+    return out
+
+
 def status(cfg):
     import fetcher
     try:
@@ -1017,6 +1071,7 @@ def status(cfg):
                                      "keywords": n_kw, "papers": _pillar_papers(cfg)},
             "env": {"has_ieee_key": bool(os.environ.get("IEEE_API_KEY", "").strip()), "has_claude": has_claude(cfg), "claude_enabled": claude_enabled(cfg),
                     "claude_command": (cfg.get("claude") or {}).get("command") or "claude",
+                    "digests": digest_status(cfg),  # v3.4.0: 🧮 / 🔍 / 🤖 mode and the last 7 days
                     "has_git": shutil.which("git") is not None,
                     "contact_email_set": bool(EMAIL_RX.match((cfg.get("contact_email") or "").strip()))},
             "data_repo": dr,
@@ -1112,7 +1167,7 @@ ACTIONS = {"rescore_and_seed": "▶ Run & Update Dashboard", "pull_data_repo": "
            "retire_topic": "🏺 Retire Topic Dive", "unretire_topic": "↺ Restore Topic Dive", "retire_pillar": "🏺 Retire Pillar",
            "unretire_pillar": "↺ Restore Pillar", "delete_pillar": "🗑 Delete Pillar", "drop_antique_pillar": "🗑 Drop Antique Tag",
            "self_update": "⬆️ Update Radar Now", "clone_data_repo": "📦 Clone Shared Repo",
-           "apply_schedule": "⏰ Save & Apply Friday Schedule"}
+           "apply_schedule": "⏰ Save & Apply Friday Schedule", "refine": "✨ AI Refine (one paper)"}
 TOPIC_ACTIONS = ("topic_recall", "topic_dive")
 SLUG_RX = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 
@@ -1145,6 +1200,7 @@ def plan(action, cfg, opts=None):
             "apply_schedule": [["--apply-schedule"]],
             "sync_data_repo": [["--sync"], ["--sync-data-repo"]],
             "init_data_repo": [["--init-data-repo", str((opts or {}).get("spec") or "<owner/name>")]],
+            "refine": [["--refine=" + str(o.get("doi") or "<doi>")]],  # v3.4.0: DASHBOARD.html ✨ AI Refine
             "daily": [[] if claude_on(cfg) else ["--no-claude"]]}[action]
 
 
@@ -1533,6 +1589,13 @@ def api_post(path, req, jobs):
                 url = str(req["clone_url"]).strip()
                 if not CLONE_RX.match(url):
                     return 400, {"ok": False, "error": "not a clone URL (https://… or git@…, without a user name or token)"}
+            if action == "refine":  # v3.4.0: ✨ AI Refine needs the Claude CLI and one DOI
+                doi = str(req.get("doi") or "").strip().lower()
+                if not DOI_RX.match(doi):
+                    return 400, {"ok": False, "error": "refine: a DOI like 10.1109/jssc.2026.1234567"}
+                if not has_claude(load_cfg()):
+                    return 400, {"ok": False, "error": "✨ AI Refine needs the Claude CLI (none found on this machine)"}
+                req["doi"] = doi
             if action in TOPIC_ACTIONS:  # v3.0.6: 🔎 Topic Deep-Dive & Local Recall
                 qq = re.sub(r"\s+", " ", str(req.get("query") or "")).strip()
                 if not 3 <= len(qq) <= 300 or not re.search(r"[^\W\d_]{2}", qq):
@@ -1981,7 +2044,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.3</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.4.0</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1989,7 +2052,7 @@ def render(data):
 <div id="updbanner"></div>
 <section class="card cockpit" id="c-status"></section>
 <section class="card" id="c-console" hidden></section>
-<div class="stepbar"><h2>🧩 Setup in 4 steps</h2><span class="muted small">finished steps fold into one line; click a step to open it</span>
+<div class="stepbar"><h2>🧩 Setup in 5 steps</h2><span class="muted small">finished steps fold into one line; click a step to open it</span>
 <button class="btn small" id="toggleall" onclick="toggleAll()">⊞ Expand All</button></div>
 <details class="step-card" id="s1"><summary><span class="snum">1</span><span class="stitle">Step 1 · Basic Profile &amp; Discipline Preset <em>(Required)</em></span>
 <span class="sbadge" id="s1b"></span><span class="sarrow">▸</span><span class="ssum" id="s1s"></span></summary>
@@ -2002,9 +2065,12 @@ def render(data):
 <div class="sbody"><section id="c-plan"></section><section id="c-people"></section>
 <details class="fine" id="fine"><summary>🎛️ Fine-tune keywords &amp; weights per pillar</summary><section id="c-themes"></section></details>
 <section id="s3act"></section></div></details>
-<details class="step-card" id="s4"><summary><span class="snum">4</span><span class="stitle">Step 4 · Topic Deep-Dive &amp; Advanced Settings <em>(Optional)</em></span>
+<details class="step-card" id="s4"><summary><span class="snum">4</span><span class="stitle">Step 4 · Topic Deep-Dive &amp; Store Search <em>(Optional)</em></span>
 <span class="sbadge" id="s4b"></span><span class="sarrow">▸</span><span class="ssum" id="s4s"></span></summary>
-<div class="sbody"><section id="c-topic"></section><section id="c-search"></section><section id="c-advanced"></section><section id="c-deploy"></section></div></details>
+<div class="sbody"><section id="c-topic"></section><section id="c-search"></section></div></details>
+<details class="step-card" id="s5"><summary><span class="snum">5</span><span class="stitle">Step 5 · Advanced Settings &amp; Boosters <em>(Optional)</em></span>
+<span class="sbadge" id="s5b"></span><span class="sarrow">▸</span><span class="ssum" id="s5s"></span></summary>
+<div class="sbody"><section id="c-advanced"></section><section id="c-deploy"></section></div></details>
 <p class="muted foot">Generated <span id="gen"></span>. Secrets (IEEE key, tokens, <code>.env</code>) are never shown or
 stored here: only whether they are set.</p>
 <footer class="ccfoot"><a href="{REPO_URL}" target="_blank" rel="noopener">⭐ Star on GitHub</a> ·
@@ -2247,7 +2313,7 @@ function collect() {
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
              domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule,
              topic: S.topic, catch_up_since: S.catch_up_since, venues: S.venues, flagship_venues: S.flagship_venues,
-             claude_enabled: S.claude_enabled};
+             claude_mode: S.claude_mode};
   u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
   const sh = KW.pillars.map(p => (p.short || '').trim());
   while (sh.length && !sh[sh.length - 1]) sh.pop();
@@ -2335,23 +2401,30 @@ function ieeeRow(env) {
     onclick: () => { if (!API) return showConsole('Set IEEE_API_KEY in a terminal', null, keyCmds()); box.hidden = !box.hidden; if (!box.hidden) inp.focus(); }}, '🔑 Set / Update Key');
   return h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set ' : '⚪ not set (optional): Crossref + OpenAlex are used ', btn, box);
 }
-// v3.3.3: 🔑 Claude AI row: 🤖 Auto / 🧮 0-Token only (config.json claude.enabled), saved right away
+// v3.4.0: 🔑 Claude AI row: status dot + ONE 3-mode selector (config.json claude.mode, saved right away), the selected
+// mode's one-line description and the 7-day digest counter beneath. 🧮 Draft replaces v3.3.3's "0-Token only".
+const CLAUDE_MODES = [
+  ['draft', '🧮 0-Token Draft Only', 'pure-Python structured digests drafted from the abstracts on this machine, 0 tokens'],
+  ['hybrid', '🔍 Hybrid Audit (Recommended)', 'local 0-token drafts + one Claude (haiku) JSON audit of only the uncertain / ⚠️ drafts and the week\'s top 3 (≈ 60–85 % fewer tokens in our benchmark)'],
+  ['full', '🤖 Full Claude', 'every new paper digested end-to-end by Claude']];
 function claudeRow(env) {
-  const sel = h('select', {class: 'in', 'aria-label': 'Claude AI use', title: '🧮 0-Token only runs everything with --no-claude (scores, dashboard, seeding, topic tables), even with the Claude CLI installed',
-    onchange: e => { const on = e.target.value === 'auto', was = S.claude_enabled;
-      S.claude_enabled = on;
-      saveKeys({claude_enabled: on}, on ? '🤖 Claude AI: Auto (digests when the CLI is there)' : '🧮 0-Token only: every run uses --no-claude', () => { S.claude_enabled = was; }); }},
-    h('option', {value: 'auto', selected: S.claude_enabled !== false}, '🤖 Auto (use Claude when available)'),
-    h('option', {value: 'zero', selected: S.claude_enabled === false}, '🧮 0-Token only (--no-claude)'));
-  return h('span', {}, env.has_claude ? (S.claude_enabled === false ? `⚪ Installed (${env.claude_command}), not used ` : `🟢 Ready (${env.claude_command}) `)
-                                      : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work) ', sel,
+  const cur = claudeMode(), d = env.digests || {}, why = (CLAUDE_MODES.find(x => x[0] === cur) || [])[2] || '';
+  const sel = h('select', {class: 'in', id: 'claudemode', 'aria-label': 'Claude AI digest mode', disabled: !env.has_claude,
+      title: env.has_claude ? 'Saved right away (config.json claude.mode)' : 'Hybrid and Full need the Claude CLI',
+      onchange: e => setClaudeMode(e.target.value)},
+    CLAUDE_MODES.map(([k, label]) => h('option', {value: k, selected: cur === k, disabled: !env.has_claude && k !== 'draft'}, label)));
+  const led = d.days ? `Last 7 days: ${fmt(d.draft)} draft(s) final at 0 tokens · ${fmt(d.audit)} audited (~${fmt(d.tok_audit || 0)} tokens) · ` +
+    `${fmt(d.full)} full Claude digest(s) (~${fmt(d.tok_full || 0)} tokens), estimated.` : 'No digests written in the last 7 days yet.';
+  return h('span', {}, env.has_claude ? `🟢 Ready (${env.claude_command}) ` : '⚪ CLI not installed — 0-Token Draft active ', sel,
+    h('div', {class: 'muted small', id: 'claudewhy'}, why),
+    h('div', {class: 'muted small'}, led + (env.has_claude ? ' ✨ AI Refine (one paper) is in DASHBOARD.html.' : '')),
     env.has_claude ? null : h('details', {class: 'how'}, h('summary', {}, '💡 Optional: how to install the Claude CLI'), h('div', {class: 'small'},
-      h('p', {}, 'Not needed: 0-Token mode already scores, seeds, builds the dashboard and the topic tables. The Claude CLI only adds written digests.'),
+      h('p', {}, 'Not needed: 0-Token mode already scores, seeds, builds the dashboard and the topic tables and drafts digests from the abstracts. The Claude CLI adds the 🔍 audit, 🤖 full digests, the weekly synthesis and ✨ AI Refine.'),
       cmdRow('npm install -g @anthropic-ai/claude-code'), h('p', {}, 'then run ', h('code', {}, 'claude'), ' once to sign in, and start the radar again.'))));
 }
 // v3.3.3: save a few settings right away (only these keys; other unsaved edits stay pending)
 async function saveKeys(obj, msg, undo) {
-  if (!API) { changed(); renderAdvanced(); renderSteps(); return toast(msg + ' · 💾 Save Config writes config.json', 6000); }
+  if (!API) { changed(); renderAdvanced(); renderStatus(); renderSteps(); return toast(msg + ' · 💾 Save Config writes config.json', 6000); }
   let r; try { r = await call('POST', '/api/config', {config: obj}); } catch (e) { r = {ok: false, error: String(e)}; }
   if (!r.ok) { alert('Not saved: ' + r.error); if (undo) undo(); renderAdvanced(); return false; }
   for (const k of Object.keys(obj)) S[k] = r.editable[k];
@@ -2386,10 +2459,10 @@ function renderStatus() {  // v3.1.0: the top cockpit, 3 status pods + the quick
         ? spill('ok', `🟢 Connected: ${repoName(dr.remote_url) || 'data repo'} · ${np} peer${np === 1 ? '' : 's'}`, `${fmt(dr.papers)} papers in the shared corpus`, () => openTo('#c-repo'))
         : spill('opt', '⚪ Not connected', 'Optional: create or clone a private data repo in Step 2', () => openTo('#c-repo')),
         rr ? spill('opt on', `📚 ${rr} shared repo${rr === 1 ? '' : 's'} to read`, 'data_repo.read_repos', () => openTo('#c-repo')) : null)),
-    h('div', {class: 'pod quiet'}, h('h3', {}, '⚙️ Optional Boosters', h('span', {class: 'muted small'}, env.has_claude ? '(Optional)' : '(Optional — 0-Token mode active)')),
+    h('div', {class: 'pod quiet'}, h('h3', {}, '⚙️ Optional Boosters', h('span', {class: 'muted small'}, claudeOn() ? '(Optional)' : '(Optional — 🧮 0-Token mode active)')),
       h('div', {class: 'chips'},
         spill('opt' + (env.has_ieee_key ? ' on' : ''), (env.has_ieee_key ? '🟢' : '⚪') + ' IEEE API', env.has_ieee_key ? 'IEEE_API_KEY is set' : 'Not set: Crossref / OpenAlex are used instead', adv),
-        spill('opt' + (env.has_claude ? ' on' : ''), (env.has_claude ? '🟢' : '⚪') + ' Claude AI', env.has_claude ? `Ready (${env.claude_command})` : 'No Claude CLI: scoring, dashboard and seeding work; digests and the weekly synthesis are skipped', adv),
+        spill('opt' + (claudeOn() ? ' on' : ''), (claudeOn() ? '🟢' : '⚪') + ' Claude AI · ' + ({draft: '🧮 Draft', hybrid: '🔍 Hybrid', full: '🤖 Full'}[claudeMode()]), env.has_claude ? (claudeOn() ? `Ready (${env.claude_command})` : '🧮 0-token draft digests; the weekly synthesis is skipped') : 'No Claude CLI: 🧮 0-token draft digests; the weekly synthesis is skipped', adv),
         spill('opt' + (tasteOn() ? ' on' : ''), (tasteOn() ? '🟢' : '⚪') + ' Taste Model', tasteText(), adv))));
   const qa = h('div', {class: 'qa'}, h('div', {class: 'qah'}, '⚡ Quick Actions', h('span', {class: 'muted small'}, API ? 'run on this computer; output below' : 'static page: each shows its command')),
     runBtn('rescore_and_seed', null, true, null, 'go'), runBtn('sync_data_repo'), runBtn('pull_data_repo'),
@@ -2401,7 +2474,7 @@ function renderStatus() {  // v3.1.0: the top cockpit, 3 status pods + the quick
   $('#gen').textContent = ST.generated + (API ? ' (live)' : ' (snapshot in this file)');
 }
 
-// ---------- v3.1.0: Step 1 · profile, Step 4 · venues / schedule / keys, and the step accordions ----------
+// ---------- v3.1.0: Step 1 · profile, Step 5 · boosters (v3.4.0: venues / schedule are cross-links), the step accordions ----------
 function renderProfile() {
   const ok = /^[^@\s"<>]+@[^@\s"<>]+\.[A-Za-z]{2,}$/.test(S.contact_email || '');
   fill($('#c-profile'), h('h2', {}, '👤 Basic Profile'),
@@ -2416,15 +2489,16 @@ function renderProfile() {
 }
 function renderAdvanced() {
   const env = ST.env, V = S.venues || [];
-  fill($('#c-advanced'), h('h2', {}, '📚 Venues, Schedule & Optional API Keys'),
-    h('h3', {}, `Venues (${V.length})`),
-    V.length ? h('div', {class: 'chips'}, V.map(v => h('span', {class: 'chip', title: v.name + (v.source ? ' · source: ' + v.source : '')}, h('span', {class: 't'}, (isFlag(v.short) ? '⭐ ' : '☑ ') + v.short))))
-      : h('p', {class: 'muted small'}, 'No venues configured.'),
-    h('p', {class: 'muted small'}, h('a', {href: '#c-venues', onclick: e => { e.preventDefault(); openTo('#c-venues'); }}, '✏️ Manage venues in Step 1 → 📚 Watched Venues'),
-      ' (Quick-Pick Catalog, custom ISSN / name lookup, ⭐ flagship, ✕ remove). A 🧭 domain preset can also replace the whole list.'),
-    h('h3', {}, '🗓️ Schedule'),
-    h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, 'Friday times: ⏰ Friday Schedule in Step 2.'),
-    h('h3', {}, '🔑 Optional boosters'),
+  // v3.4.0 (Step 5): venues and the schedule are edited in Steps 1 and 2; here only a 1-line cross-link summary
+  const jump = (sel, text) => h('a', {href: sel, onclick: e => { e.preventDefault(); openTo(sel); }}, text);
+  const sc = S.schedule || {}, nf = V.filter(v => isFlag(v.short)).length, ax = STARTER ? (S.arxiv || {}) : null;
+  fill($('#c-advanced'), h('h2', {}, '🔑 Optional boosters'),
+    h('p', {class: 'small xlinks'}, `📚 ${V.length} watched venue${V.length === 1 ? '' : 's'}` + (nf ? ` (${nf} ⭐)` : '') + ' ', jump('#c-venues', '(edit in Step 1 ↗)'),
+      ` · 📅 ${D.report_day || 'Friday'} schedule (` + [sc.auto_update_local !== false ? `update ${sc.update_time || '07:00'}` : 'update off',
+        sc.auto_upload_repo !== false ? `repo ${sc.upload_time || '12:00'}` : 'repo off'].join(' · ') + ') ', jump('#c-schedule', '(edit in Step 2 ↗)'),
+      ax ? [' · ', h('label', {title: 'Run the arXiv queries on the weekly run (queries and categories: Step 2)'},
+        h('input', {type: 'checkbox', checked: !!ax.enabled, onchange: e => { ax.enabled = e.target.checked; changed(); renderRepo(); }}), '🧪 arXiv feed'),
+        ' ', jump('#c-repo', '(queries in Step 2 ↗)')] : null),
     h('div', {class: 'kv boosters'}, h('b', {}, 'IEEE API'), ieeeRow(env),
       h('b', {}, 'Claude AI'), claudeRow(env),
       h('b', {}, 'Taste model'), h('span', {}, tasteText(), ' ',
@@ -2439,31 +2513,38 @@ function renderAdvanced() {
     h('p', {class: 'muted small'}, 'Keys are never shown or stored on this page: only whether they are set.'));
 }
 let AUTO = true;  // smart auto-collapse until the user opens or closes a step, or the live data has arrived
-function claudeOn() { return !!(ST.env.has_claude && ST.env.claude_enabled !== false); }  // v3.3.3: 🤖 Auto and the CLI is there
+function claudeMode() { return !(ST.env || {}).has_claude ? 'draft' : (S.claude_mode || 'hybrid'); }  // v3.4.0: no CLI = 🧮 Draft
+function claudeOn() { return !!(ST.env.has_claude && claudeMode() !== 'draft'); }  // v3.3.3/v3.4.0: the CLI is there and the mode is not 🧮 Draft
 function boosters() { const e = ST.env || {}; return (e.has_ieee_key ? 1 : 0) + (claudeOn() ? 1 : 0) + (tasteOn() ? 1 : 0); }  // v3.3.1
 function stepInfo() {
   const env = ST.env, dr = ST.data_repo, p = ST.pillars, T = ST.topics || {dives: []}, rr = (dr.read_repos || []).length;
   const pr = (D.presets || []).find(x => x.key === S.domain_preset);
+  const nd = T.dives.filter(t => !t.retired).length, nr = T.dives.length - nd;
   return [
     {id: 's1', req: true, done: !!env.contact_email_set, sum: `${pr ? pr.icon + ' ' + pr.label : 'no preset'} · 📚 ${(S.venues || []).length} venues · ✉️ ${env.contact_email_set ? 'e-mail set' : 'e-mail missing'}`},
     {id: 's2', req: false, done: !!dr.connected || rr > 0, sum: dr.connected ? `🟢 ${repoName(dr.remote_url) || 'data repo'} · ${dr.peers.length} peer(s)` + (rr ? ` · ${rr} shared repo(s) to read` : '')
       : (rr ? `📚 ${rr} shared repo(s) to read · no primary repo` : '⚪ Not connected: solo use works fine')},
     {id: 's3', req: true, done: !!p.ready, sum: p.ready ? `${p.count} pillars · ${fmt(p.keywords)} weighted keywords · ${S.anchors.length} anchors · ${S.vip_authors.length} VIP authors` : 'name your pillars and plan their keywords'},
-    {id: 's4', req: false, opt: true, done: boosters() === 3, boost: boosters(),
-     sum: `🔑 ${boosters()}/3 boosters · ${S.deployment === 'mesh_lan' ? '🌐 Virtual Mesh LAN Hub' : '💻 Single PC'} · 🔎 ${T.dives.filter(t => !t.retired).length} dive(s)` +
-          (T.dives.some(t => t.retired) ? ` (+${T.dives.filter(t => t.retired).length} 🏺)` : '') + ` · 📚 ${(S.venues || []).length} venues`}];
+    // v3.4.0: Step 4 = topic dives + store search (daily research tools), Step 5 = boosters + deployment (one-time settings)
+    {id: 's4', req: false, tool: true, done: nd > 0,
+     pill: (nd ? `🔎 ${nd} Active Dive${nd === 1 ? '' : 's'} · ` : '') + (ST.store.fts ? (nd ? '⚡ FTS5 Ready' : '⚡ FTS5 Search Ready') : '🔎 LIKE Search'),
+     sum: `🔎 ${nd} dive(s)` + (nr ? ` (+${nr} 🏺)` : '') + ` · ⚡ ${fmt(ST.store.papers)} papers ${ST.store.fts ? 'indexed' : 'searchable (no FTS5 index yet)'}`},
+    {id: 's5', req: false, opt: true, done: boosters() === 3, boost: boosters(),
+     sum: `🔑 ${boosters()}/3 boosters · Claude AI ${({draft: '🧮 Draft', hybrid: '🔍 Hybrid', full: '🤖 Full'})[claudeMode()]} · ` +
+          ({mesh_lan: '🌐 Virtual Mesh LAN Hub', enterprise: '🏢 Enterprise'}[S.deployment] || '💻 Single PC')}];
 }
 function renderSteps() {
   const fresh = !(ST.store.papers > 0) && !ST.pillars.ready, info = stepInfo();
-  const core = info.filter(x => x.req).every(x => x.done);  // Steps 1 and 3 done: Step 4 reads as ready, not unfinished
+  const core = info.filter(x => x.req).every(x => x.done);  // Steps 1 and 3 done: Steps 4 and 5 read as ready, not unfinished
   for (const x of info) {
     const el = $('#' + x.id), b = $('#' + x.id + 'b'); if (!el) continue;
     el.classList.toggle('done', x.done);
-    b.className = 'sbadge' + (x.done ? ' ok' : (x.req ? ' need' : (x.opt && core ? ' boost' : '')));
-    b.textContent = x.opt ? (x.boost === 3 ? '✅ 3/3 Boosters Active' : x.boost ? `🟢 ${x.boost}/3 Boosters Active` : core ? '🟢 Ready · 0-Token Mode' : '⚪ Optional')
+    b.className = 'sbadge' + (x.done ? ' ok' : (x.req ? ' need' : ((x.opt || x.tool) && core ? ' boost' : '')));
+    b.textContent = x.tool ? x.pill
+      : x.opt ? (x.boost === 3 ? '✅ 3/3 Boosters Active' : x.boost ? `🟢 ${x.boost}/3 Boosters Active` : core ? '🟢 Ready · 0-Token Mode' : '⚪ Optional')
       : x.done ? '✅ Complete' : (x.req ? '⚠️ Needs setup' : '⚪ Not set up');
     $('#' + x.id + 's').textContent = x.sum;
-    if (AUTO) el.open = x.opt ? false : (fresh ? true : (x.req && !x.done));
+    if (AUTO) el.open = (x.opt || x.tool) ? false : (fresh ? true : (x.req && !x.done));
   }
   fill($('#s3act'), h('div', {class: 'runbar'}, h('button', {class: 'btn', onclick: () => save()}, '💾 Save Config'),
     runBtn('rescore_and_seed', null, true, '💾 ▶ Save, Rescore & Update Dashboard', 'go'),
@@ -2490,7 +2571,7 @@ document.querySelectorAll('.step-card>summary').forEach(x => x.addEventListener(
 // ---------- run bar + console ----------
 const RUN_TIPS = {
   rescore_and_seed: 'Saves your settings, re-scores every paper with your keywords/authors (--rescore), tops up each pillar to 10 candidates (--seed-pillars 5 --no-claude) and rebuilds DASHBOARD.html. 0 tokens, no API calls except a small Beyond-IEEE search.',
-  daily: 'One collection pass now (IEEE / Crossref / OpenAlex) and this week\'s report' + (claudeOn() ? ' with digests (claude -p).' : ST.env.has_claude ? ' (--no-claude: 🧮 0-Token only is set in Step 4).' : ' (--no-claude: no Claude CLI found).') + ' On the report day it also finalizes the week.',
+  daily: 'One collection pass now (IEEE / Crossref / OpenAlex) and this week\'s report' + (claudeOn() ? ' with digests (claude -p).' : ST.env.has_claude ? ' with 🧮 0-token draft digests (--no-claude: Claude AI is set to 🧮 Draft in Step 5).' : ' with 🧮 0-token draft digests (--no-claude: no Claude CLI found).') + ' On the report day it also finalizes the week.',
   pull_data_repo: 'Read-only: fetch origin/main of ic-paper-radar-data, import every peer overlay, merge new/enriched papers into your store, adopt the external ones ≥ min_score, rebuild the dashboards. Nothing is pushed.',
   sync_data_repo: '--sync (offline Save-Marks files) then --sync-data-repo: pull, merge, export the clean union, write peers/<you>.json and push a real gain to your private data repo; then read the shared repos.',
   init_data_repo: '--init-data-repo: create (gh) or clone your private repo into paths.data_repo_dir, write the protocol files, your clean corpus and your overlay, push main, and set data_repo.remote_url.',
@@ -2704,7 +2785,6 @@ function renderThemes() {
     h('p', {class: 'muted small'}, 'Click a weight to change it; ⇄ moves a keyword to another pillar.'),
     howBox('A paper\'s score is the sum of the weights of the keywords in its title, abstract and index terms (word match, case-insensitive unless ALL CAPS; a space or hyphen matches either; plurals match). The pillar with the most hits files it. Weights: 5 = defining term, 3–4 = strong, 1–2 = generic. ',
       h('span', {class: 'tip', title: 're:<label>::<regex> is a raw (Python) regular expression, case-sensitive unless it starts with (?i). The label is what the report shows.'}, 'Regex keywords?')),
-    FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar.`) : null,
     h('div', {class: 'row'}, h('button', {class: 'btn primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
       h('span', {class: 'muted small'}, 'name, anchors and seed words → 🪄 planned keywords for the new pillar only → its first 10 candidates')),
     ps, loose, orph,
@@ -2993,7 +3073,7 @@ function renderTopic() {
     h('div', {class: 'row'}, inp), years,
     h('div', {class: 'row'}, btn('topic_recall'), btn('topic_dive', true),
       h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
-        zbox, noClaude ? ' 0-Token Fast Mode (no Claude CLI found)' : ' 0-Token Fast Mode (--no-claude)')),
+        zbox, noClaude ? (ST.env.has_claude ? ' 0-Token Fast Mode (Claude AI is 🧮 Draft in Step 5)' : ' 0-Token Fast Mode (no Claude CLI found)') : ' 0-Token Fast Mode (--no-claude)')),
     h('div', {class: 'muted small', id: 'topicgroups'}, API ? 'Type a question to see how it is split into concept groups.' : ''),
     h('p', {class: 'muted small'}, `⚡ Recall: your local store, 0 API calls · 🔎 Deep-Dive: + OpenAlex, ${tp.n_classic} classics ` +
       (tp.min_year ? `(${tp.min_year}–${tp.recent_from_year - 1})` : `(before ${tp.recent_from_year})`) + ` + ${tp.n_recent} recent papers (${tp.recent_from_year} on). The years and counts are saved with the run.`),
@@ -3172,7 +3252,7 @@ function renderPeople() {
 
 // ---------- 4. private shared repo & peers ----------
 function toggle(obj, key, label, tip) {
-  return h('label', {title: tip || ''}, h('input', {type: 'checkbox', checked: !!obj[key], onchange: e => { obj[key] = e.target.checked; changed(); renderRepoStats(); }}), label);
+  return h('label', {title: tip || ''}, h('input', {type: 'checkbox', checked: !!obj[key], onchange: e => { obj[key] = e.target.checked; changed(); renderRepoStats(); renderAdvanced(); }}), label);
 }
 function renderRepoStats() {
   const s = ST.sharing, el = $('#sharestats'); if (!el) return;
@@ -3380,6 +3460,12 @@ function vBadge(v) {
 function watched(v) {  // the watched venue with the same short code (or, for a journal, a shared ISSN)
   const iss = new Set(v.issn || []);
   return (S.venues || []).find(x => x.short.toLowerCase() === v.short.toLowerCase() || (v.type === 'journal' && (x.issn || []).some(i => iss.has(i))));
+}
+function setClaudeMode(m) {  // v3.4.0: saves only claude.mode (the server writes claude.enabled as its mirror)
+  const was = S.claude_mode;
+  S.claude_mode = m;
+  return Promise.resolve(saveKeys({claude_mode: m}, 'Claude AI: ' + (CLAUDE_MODES.find(x => x[0] === m) || [, m])[1], () => { S.claude_mode = was; }))
+    .then(() => renderTopic());  // the Topic Dive's 0-Token Fast Mode box follows 🧮 Draft
 }
 async function venuesChanged(msg, undo) {  // saves only venues + catch_up.flagship_venues; other edits stay unsaved
   renderVenues(); renderAdvanced(); renderSteps(); changed();
@@ -3712,7 +3798,7 @@ async function connect(again) {
   }
 }
 buildKW(); renderAll(); baseline = snapshot(); changed(); connect();
-if (/^#(c-[a-z]+|s[1-4])$/.test(location.hash)) setTimeout(() => openTo(location.hash), 50);
+if (/^#(c-[a-z]+|s[1-5])$/.test(location.hash)) setTimeout(() => openTo(location.hash), 50);  // #c-topic → Step 4, #c-advanced → Step 5
 // v3.0.7: the dashboard's ＋ Add Pillar / ＋ New Topic Dive pills land in the guided flows
 if (location.hash === '#add-theme') setTimeout(() => { openTo('#c-plan'); addPillarWizard(); }, 300);
 if (location.hash === '#topic-dive') setTimeout(() => openTo('#c-topic', '#topicq'), 300);

@@ -61,7 +61,13 @@ MIGRATIONS = {"grp": "TEXT DEFAULT 'ieee'",      # 'ieee' or 'beyond' (Nature/Sc
               "pin": "TEXT",                      # 'anchor' | 'manual' (pins.py)
               "pillar": "INTEGER",                # user-chosen pillar (--add --pillar); overrides the guess
               "user_note": "TEXT",                # 🏷️ Tech note: the user's key technique / takeaway (v2.15)
-              "retired_pillar": "TEXT"}           # 🏺 the antique (retired) pillar it belonged to (v3.0.8, retire.py)
+              "retired_pillar": "TEXT",           # 🏺 the antique (retired) pillar it belonged to (v3.0.8, retire.py)
+              "draft_conf": "REAL",               # 🧮 0-token draft confidence 0–1 (v3.4.0, drafter.py)
+              "digest_src": "TEXT"}               # draft | draft-queued | audit-pass | audit-patch | claude | refine
+# v3.4.0: 0-token drafts (drafter.py) stay on this radar: the share file carries Claude-written digests only, and a
+# peer's Claude digest replaces a local draft or audited draft on merge
+LOCAL_DIGEST_VERS = ("draft-v1",)
+UPGRADABLE_VERS = ("draft-v1", "audit-v1")
 
 
 # ---------- full-text search (v3.0): SQLite FTS5 over the papers table ----------
@@ -343,6 +349,10 @@ def export_clean_share_db(src_db_path, dst_db_path, include_curation=False, secr
         db.execute("DELETE FROM papers WHERE status='external_ro'")
         db.execute("DELETE FROM api_usage")
         db.execute("DELETE FROM peer_curation")
+        # v3.4.0: a 0-token draft is redone by any radar in milliseconds; only Claude-written digests are shared
+        db.execute(f"UPDATE papers SET digest=NULL, digest_ver=NULL WHERE digest_ver IN "
+                   f"({','.join('?' * len(LOCAL_DIGEST_VERS))})", LOCAL_DIGEST_VERS)
+        db.execute("UPDATE papers SET draft_conf=NULL, digest_src=NULL")
         if skip_arxiv:
             db.execute("CREATE TEMP TABLE shared (doi TEXT PRIMARY KEY)")
             db.executemany("INSERT OR IGNORE INTO shared VALUES (?)", shared)
@@ -436,8 +446,11 @@ def merge_store(store, other_db_path, peer=None, log=print, read_only=False):
                 for k in ("cited_by", "ieee_cites"):
                     if (o.get(k) or 0) > (mine.get(k) or 0):
                         fill[k] = o[k]
-                if digest and not mine.get("digest"):
+                if digest and (not mine.get("digest") or (mine.get("digest_ver") in UPGRADABLE_VERS
+                                                          and o.get("digest_ver") not in UPGRADABLE_VERS)):
                     fill.update(digest=digest, digest_ver=o.get("digest_ver"))
+                    if mine.get("digest"):  # a peer's Claude digest replaces our 🧮 draft / 🔍 audited draft
+                        fill.update(digest_src="claude", draft_conf=None)
                 if not read_only and mine.get("status") == "external_ro":
                     fill["status"] = "external"
                     stats["promoted"] += 1

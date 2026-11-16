@@ -58,5 +58,10 @@ Instructions for an AI agent (Claude Code) opened in this folder:
 - `CITATION.cff` is the citation metadata (keep `version` in step with releases). New domains go in
   `presets.py`; new sources in `fetcher.SOURCES` (README, "Call for Co-Maintainers").
 - Reports and digests are written in English.
+- Digests (v3.4.0, `drafter.py`): `config.json` → `claude.mode` is `draft` (0-token drafts from the abstracts,
+  also used without the Claude CLI), `hybrid` (drafts + one `claude -p --model haiku` audit of the uncertain
+  ones) or `full` (the template's default). `--no-claude` = `draft`; `--refine DOI` writes one full Claude
+  digest; `--draft-eval` compares the drafts with stored Claude digests at 0 tokens. STARTUP.html has 5 steps
+  (Step 4 topic dives and search, Step 5 boosters and deployment).
 - If `paper_store.sqlite` is missing or empty, say so: the user can request the pre-built database from
   the author (README.md, Step 1) or build one with weekly runs and `--topic` dives.
