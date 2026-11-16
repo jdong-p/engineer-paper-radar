@@ -620,6 +620,9 @@ def main():
         a.cite = None
 
     cfg = fetcher.load_config()
+    if (cfg.get("claude") or {}).get("enabled") is False and not a.no_claude:
+        a.no_claude = True  # v3.3.3: STARTUP.html → 🔑 Claude AI → 🧮 0-Token only (config.json claude.enabled = false)
+        print("Claude AI: 🧮 0-Token only (config.json claude.enabled = false): running as --no-claude", flush=True)
     if a.plan_keywords is not None:  # v3.0.5, read only: prints the plan (STARTUP.html 🪄 shows it in a preview)
         import keyword_planner
         return keyword_planner.cli(cfg, a.plan_keywords)

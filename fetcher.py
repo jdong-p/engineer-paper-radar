@@ -38,6 +38,27 @@ HERE = Path(__file__).resolve().parent
 IEEE_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles?"
 
 
+def load_local_env(names=("IEEE_API_KEY",)):
+    """v3.3.3: KEY=value lines of the git-ignored .env next to briefing.py (where STARTUP.html's 🔑 Set / Update Key
+    keeps a key on macOS / Linux). An environment variable that is already set wins; values are never printed."""
+    p = HERE / ".env"
+    try:
+        lines = p.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    for ln in lines:
+        m = re.match(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$", ln)
+        if m and m[1] in names and not os.environ.get(m[1], "").strip():
+            v = m[2]
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                v = v[1:-1]
+            if v:
+                os.environ[m[1]] = v
+
+
+load_local_env()
+
+
 def load_config():
     import catalog  # here, not at the top: catalog imports this module
     import config_file

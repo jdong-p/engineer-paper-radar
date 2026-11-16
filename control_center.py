@@ -18,6 +18,9 @@ API (JSON):
                             _system/config.backup.json)
   POST /api/verify_venue  ← {"catalog": short} | {"query", "type", "short", "regex"} | {"suggest": name}: a venue
                             checked live against Crossref + OpenAlex (venues.verify) for the confirmation modal
+  POST /api/set_env_key   ← {"name": "IEEE_API_KEY", "value"?: str, "clear"?: bool} (v3.3.3): write-only; the key
+                            goes to the Windows user environment (HKCU\\Environment) or the git-ignored .env next to
+                            briefing.py, and this process; never to config.json; answers {"ok", "has_ieee_key"} only
   POST /api/cancel_job    ← {"force"?: bool}: ⏹ Stop / Unlock (v3.3.2): ends this server's job (its briefing.py process
                             tree); with force also a run this page didn't start; a lock left by a dead run is cleared
   POST /api/run           ← {"action": "rescore_and_seed" | "pull_data_repo" | "sync_data_repo" | "daily",
@@ -81,7 +84,7 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "data_repo_dir": ["paths", "data_repo_dir"], "domain_preset": ["domain_preset"], "deployment": ["deployment"],
          "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"], "topic": ["topic"],
          "catch_up_since": ["catch_up", "since"], "venues": ["venues"],  # v3.3.0: Step 1 → 📚 Watched Venues
-         "flagship_venues": ["catch_up", "flagship_venues"]}
+         "flagship_venues": ["catch_up", "flagship_venues"], "claude_enabled": ["claude", "enabled"]}
 TOPIC_KEYS = {"min_year": (0, 2100), "recent_from_year": (1950, 2100), "n_classic": (1, 20), "n_recent": (1, 20)}  # v3.2.3
 DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
 # v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
@@ -236,7 +239,8 @@ def editable(cfg):
            "schedule": schedule_cfg(cfg),
            "topic": topic_cfg(cfg), "catch_up_since": str((cfg.get("catch_up") or {}).get("since") or "2025-01-01"),
            "venues": json.loads(json.dumps([v for v in cfg.get("venues") or [] if isinstance(v, dict)])),
-           "flagship_venues": list((cfg.get("catch_up") or {}).get("flagship_venues") or [])}
+           "flagship_venues": list((cfg.get("catch_up") or {}).get("flagship_venues") or []),
+           "claude_enabled": claude_enabled(cfg)}
     if STARTER:
         out["arxiv"] = {k: ax.get(k, False if k in ("enabled", "share") else []) for k in ARXIV_KEYS}
     return out
@@ -485,6 +489,8 @@ def validate(upd, cfg):
             import venues as venue_rules
             vlist = upd["venues"] if isinstance(upd.get("venues"), list) else cfg.get("venues")
             put(PATHS[k], lambda v=v, vlist=vlist: venue_rules.check_flagships(v, vlist))
+        elif k == "claude_enabled":  # v3.3.3: 🔑 Claude AI → 🤖 Auto / 🧮 0-Token only
+            put(PATHS[k], lambda v=v: _bool(v, "claude_enabled"))
         elif k == "domain_preset":
             import presets
             put(PATHS[k], lambda v=v: v if v in presets.PRESETS else _fail(
@@ -888,6 +894,104 @@ def _origin_of(repo):
     return data_repo._git(repo, "remote", "get-url", "origin", check=False).stdout.strip()
 
 
+def claude_enabled(cfg):
+    """config.json claude.enabled (v3.3.3): false = 🧮 0-Token only (every run behaves as --no-claude) even with the
+    Claude CLI installed; true / missing = 🤖 Auto (Claude when the CLI is there)."""
+    return (cfg.get("claude") or {}).get("enabled", True) is not False
+
+
+def claude_on(cfg):
+    return has_claude(cfg) and claude_enabled(cfg)
+
+
+# ---------- v3.3.3: 🔑 Set / Update Key (write-only) ----------
+ENV_KEYS = ("IEEE_API_KEY",)
+ENV_VALUE_RX = re.compile(r"^[A-Za-z0-9._-]{8,200}$")
+
+
+def key_store():
+    """Where a key set from the page is kept: the Windows user environment (what `setx` / the PowerShell command
+    write, read by every new process and scheduled task), else .env next to briefing.py (fetcher.load_local_env).
+    PAPER_RADAR_KEY_STORE=dotenv forces .env."""
+    if os.environ.get("PAPER_RADAR_KEY_STORE") == "dotenv" or os.name != "nt":
+        return "dotenv"
+    return "user_env"
+
+
+def _dotenv_set(name, value):
+    """Change only the NAME=… line of .env (add it, or drop it when value is None); every other line stays byte for byte."""
+    p = HERE / ".env"
+    lines = p.read_bytes().decode("utf-8").splitlines(keepends=True) if p.exists() else []  # bytes: CRLF kept
+    out, done = [], False
+    for ln in lines:
+        if re.match(rf"^\s*(export\s+)?{re.escape(name)}\s*=", ln):
+            if value is not None and not done:
+                out.append(f"{name}={value}" + ("\r\n" if ln.endswith("\r\n") else "\n" if ln.endswith("\n") else ""))
+            done = True
+            continue
+        out.append(ln)
+    if value is not None and not done:
+        if out and not out[-1].endswith("\n"):
+            out[-1] += "\n"
+        out.append(f"{name}={value}\n")
+    if not out and not p.exists():
+        return
+    tmp = p.with_name(".env.tmp")
+    tmp.write_text("".join(out), encoding="utf-8", newline="")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    os.replace(tmp, p)
+
+
+def _user_env_set(name, value):
+    """HKCU\\Environment\\NAME (None removes it), then the 'environment changed' broadcast for new programs."""
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE) as k:
+        if value is None:
+            try:
+                winreg.DeleteValue(k, name)
+            except FileNotFoundError:
+                pass
+        else:
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
+    try:
+        import ctypes
+        res = ctypes.c_ulong()
+        ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000, ctypes.byref(res))
+    except Exception:
+        pass
+
+
+def set_env_key(req):
+    """POST /api/set_env_key: store or clear one key. The value is never returned, logged or put in config.json."""
+    name = req.get("name") or "IEEE_API_KEY"
+    if name not in ENV_KEYS:
+        raise ValueError(f"set_env_key: only {', '.join(ENV_KEYS)}")
+    clear = req.get("clear") is True
+    value = None
+    if not clear:
+        value = req.get("value")
+        value = value.strip() if isinstance(value, str) else ""
+        if not ENV_VALUE_RX.match(value):
+            raise ValueError("that doesn't look like an API key (8–200 letters, digits, '.', '_' or '-'): nothing was saved")
+    where = key_store()
+    if where == "user_env":
+        _user_env_set(name, value)
+        if clear:
+            _dotenv_set(name, None)  # a cleared key leaves no copy behind
+    else:
+        _dotenv_set(name, value)
+    if clear:
+        os.environ.pop(name, None)
+    else:
+        os.environ[name] = value
+    return {"ok": True, "name": name, "set": not clear,
+            "stored_in": "your Windows user environment (HKCU\\Environment)" if where == "user_env" else ".env next to briefing.py",
+            "has_ieee_key": bool(os.environ.get("IEEE_API_KEY", "").strip())}
+
+
 def has_claude(cfg):
     return shutil.which((cfg.get("claude") or {}).get("command") or "claude") is not None
 
@@ -911,7 +1015,7 @@ def status(cfg):
     return {"edition": "starter" if STARTER else "radar", "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "store": st, "pillars": {"count": len([k for k in catalog.PILLARS if k]), "ready": bool(ready),
                                      "keywords": n_kw, "papers": _pillar_papers(cfg)},
-            "env": {"has_ieee_key": bool(os.environ.get("IEEE_API_KEY", "").strip()), "has_claude": has_claude(cfg),
+            "env": {"has_ieee_key": bool(os.environ.get("IEEE_API_KEY", "").strip()), "has_claude": has_claude(cfg), "claude_enabled": claude_enabled(cfg),
                     "claude_command": (cfg.get("claude") or {}).get("command") or "claude",
                     "has_git": shutil.which("git") is not None,
                     "contact_email_set": bool(EMAIL_RX.match((cfg.get("contact_email") or "").strip()))},
@@ -1023,7 +1127,7 @@ def plan(action, cfg, opts=None):
     years = ([f"--min-year={int(o['min_year'])}"] if o.get("min_year") is not None else []) \
         + ([f"--split-year={int(o['split_year'])}"] if o.get("split_year") is not None else [])  # v3.2.3
     return {"topic_recall": [["--recall=" + q] + years[:1]],
-            "topic_dive": [["--topic=" + q] + years + ([] if has_claude(cfg) and not o.get("zero") else ["--no-claude"])],
+            "topic_dive": [["--topic=" + q] + years + ([] if claude_on(cfg) and not o.get("zero") else ["--no-claude"])],
             "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],
             "retire_topic": [["--retire-topic=" + str(o.get("slug") or "<slug>")]],  # v3.0.8: 🏺 Retire as Antique
             "unretire_topic": [["--unretire-topic=" + str(o.get("slug") or "<slug>")]],
@@ -1041,7 +1145,7 @@ def plan(action, cfg, opts=None):
             "apply_schedule": [["--apply-schedule"]],
             "sync_data_repo": [["--sync"], ["--sync-data-repo"]],
             "init_data_repo": [["--init-data-repo", str((opts or {}).get("spec") or "<owner/name>")]],
-            "daily": [[] if has_claude(cfg) else ["--no-claude"]]}[action]
+            "daily": [[] if claude_on(cfg) else ["--no-claude"]]}[action]
 
 
 def python_exe():
@@ -1400,6 +1504,8 @@ def api_post(path, req, jobs):
         if path == "/api/plan_keywords":  # v3.0.5: 🪄 the 0-token keyword & weight planner (read only)
             import keyword_planner
             return keyword_planner.api(load_cfg(), req)
+        if path == "/api/set_env_key":  # v3.3.3: write-only key setter (the value never comes back)
+            return 200, set_env_key(req)
         if path == "/api/cancel_job":  # v3.3.2: ⏹ Stop / Unlock
             return 200, cancel_job(jobs, bool(req.get("force")))
         if path == "/api/verify_venue":  # v3.3.0: Step 1 → 📚 Watched Venues (Crossref + OpenAlex, read only)
@@ -1717,7 +1823,7 @@ def schedule_tasks(cfg):
     sc = schedule_cfg(cfg)
     b = str(HERE / "briefing.py")
     if STARTER:
-        up = [b, "--friday"] + ([] if has_claude(cfg) else ["--no-claude"])
+        up = [b, "--friday"] + ([] if claude_on(cfg) else ["--no-claude"])
         t = [("update", "IC_Paper_Radar_FridayUpdate", False, python_exe(), up),
              ("upload", "IC_Paper_Radar_FridayUpload", False, python_exe(), [b, "--friday-upload"])]
     else:
@@ -1875,7 +1981,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.2</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.3</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1919,6 +2025,8 @@ CSS = r"""
 .antlist{border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:10px 0;background:var(--chip)}
 .antlist .arow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)}.antlist .arow:first-of-type{border-top:0}
 .sbadge.boost{color:var(--ok);border-color:var(--ok)}
+.kv.boosters>span{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.kv.boosters .keybox{display:inline-flex;flex-wrap:wrap;gap:4px}
+.kv.boosters .keybox[hidden]{display:none}.kv.boosters .keybox .in{width:16em}.kv.boosters select.in{width:auto}.kv.boosters span>.muted,.kv.boosters span>details{flex-basis:100%}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin:10px 0}
 .vcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-width:0}
 .vcard.flag{border-color:var(--cite);box-shadow:inset 3px 0 0 var(--cite)}.vtop{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
@@ -2138,7 +2246,8 @@ function collect() {
              key1_themes: S.key1_themes, min_score: S.min_score, vip_authors: S.vip_authors, vip_boost: S.vip_boost,
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
              domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule,
-             topic: S.topic, catch_up_since: S.catch_up_since, venues: S.venues, flagship_venues: S.flagship_venues};
+             topic: S.topic, catch_up_since: S.catch_up_since, venues: S.venues, flagship_venues: S.flagship_venues,
+             claude_enabled: S.claude_enabled};
   u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
   const sh = KW.pillars.map(p => (p.short || '').trim());
   while (sh.length && !sh[sh.length - 1]) sh.pop();
@@ -2199,6 +2308,58 @@ function chips(list, o) {
 // ---------- 1. setup progress ----------
 function tasteOn() { return !!(ST.taste && ST.taste.active); }
 function repoName(u) { return String(u || '').replace(/^https?:\/\/[^/]+\//, '').replace(/^git@[^:]+:/, '').replace(/\.git$/, ''); }
+// v3.3.3: 🔑 IEEE API row: a write-only key box (POST /api/set_env_key; the key is never read back)
+function keyCmds() {
+  return [h('div', {class: 'small muted'}, 'Windows (PowerShell):'), cmdRow('[Environment]::SetEnvironmentVariable("IEEE_API_KEY", "<your key>", "User")'),
+    h('div', {class: 'small muted'}, 'macOS / Linux (add the line to ~/.zshrc or ~/.bashrc to keep it):'), cmdRow('export IEEE_API_KEY="<your key>"'),
+    h('div', {class: 'small muted'}, 'Then start the radar (or Start_Radar_GUI) again so it sees the key.')];
+}
+function ieeeRow(env) {
+  const box = h('span', {class: 'keybox', hidden: true});
+  const inp = h('input', {class: 'in', type: 'password', autocomplete: 'off', spellcheck: 'false', placeholder: 'paste your IEEE API key', 'aria-label': 'IEEE API key'});
+  const send = async clear => {
+    if (!clear && !inp.value.trim()) return alert('Paste the key first.');
+    if (clear && !confirm('Remove IEEE_API_KEY from the radar computer? The radar then runs on Crossref + OpenAlex.')) return;
+    let r; try { r = await call('POST', '/api/set_env_key', clear ? {name: 'IEEE_API_KEY', clear: true} : {name: 'IEEE_API_KEY', value: inp.value}, 20000); }
+    catch (e) { r = {ok: false, error: String(e)}; }
+    inp.value = '';  // the page never keeps the key
+    if (!r.ok) return alert('Not saved: ' + (r.error || 'no answer'));
+    ST.env.has_ieee_key = !!r.has_ieee_key;
+    toast(r.set ? `🔑 Saved in ${r.stored_in}: the next runs use the IEEE API` : '🔑 IEEE_API_KEY removed', 6000);
+    renderAdvanced(); renderStatus(); renderSteps();
+  };
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); send(false); } });
+  fill(box, inp, h('button', {class: 'btn small primary', onclick: () => send(false)}, 'Save Key'),
+    h('button', {class: 'btn small danger', onclick: () => send(true), title: 'Remove the key from the radar computer'}, 'Clear'));
+  const btn = h('button', {class: 'btn small', title: API ? 'Type or paste a key: it is saved on the radar computer and never shown again' : 'Not connected to the radar server: shows the terminal command',
+    onclick: () => { if (!API) return showConsole('Set IEEE_API_KEY in a terminal', null, keyCmds()); box.hidden = !box.hidden; if (!box.hidden) inp.focus(); }}, '🔑 Set / Update Key');
+  return h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set ' : '⚪ not set (optional): Crossref + OpenAlex are used ', btn, box);
+}
+// v3.3.3: 🔑 Claude AI row: 🤖 Auto / 🧮 0-Token only (config.json claude.enabled), saved right away
+function claudeRow(env) {
+  const sel = h('select', {class: 'in', 'aria-label': 'Claude AI use', title: '🧮 0-Token only runs everything with --no-claude (scores, dashboard, seeding, topic tables), even with the Claude CLI installed',
+    onchange: e => { const on = e.target.value === 'auto', was = S.claude_enabled;
+      S.claude_enabled = on;
+      saveKeys({claude_enabled: on}, on ? '🤖 Claude AI: Auto (digests when the CLI is there)' : '🧮 0-Token only: every run uses --no-claude', () => { S.claude_enabled = was; }); }},
+    h('option', {value: 'auto', selected: S.claude_enabled !== false}, '🤖 Auto (use Claude when available)'),
+    h('option', {value: 'zero', selected: S.claude_enabled === false}, '🧮 0-Token only (--no-claude)'));
+  return h('span', {}, env.has_claude ? (S.claude_enabled === false ? `⚪ Installed (${env.claude_command}), not used ` : `🟢 Ready (${env.claude_command}) `)
+                                      : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work) ', sel,
+    env.has_claude ? null : h('details', {class: 'how'}, h('summary', {}, '💡 Optional: how to install the Claude CLI'), h('div', {class: 'small'},
+      h('p', {}, 'Not needed: 0-Token mode already scores, seeds, builds the dashboard and the topic tables. The Claude CLI only adds written digests.'),
+      cmdRow('npm install -g @anthropic-ai/claude-code'), h('p', {}, 'then run ', h('code', {}, 'claude'), ' once to sign in, and start the radar again.'))));
+}
+// v3.3.3: save a few settings right away (only these keys; other unsaved edits stay pending)
+async function saveKeys(obj, msg, undo) {
+  if (!API) { changed(); renderAdvanced(); renderSteps(); return toast(msg + ' · 💾 Save Config writes config.json', 6000); }
+  let r; try { r = await call('POST', '/api/config', {config: obj}); } catch (e) { r = {ok: false, error: String(e)}; }
+  if (!r.ok) { alert('Not saved: ' + r.error); if (undo) undo(); renderAdvanced(); return false; }
+  for (const k of Object.keys(obj)) S[k] = r.editable[k];
+  ST = r.status;
+  try { const bl = JSON.parse(baseline); for (const k of Object.keys(obj)) bl[k] = S[k]; baseline = JSON.stringify(bl); } catch (e) {}
+  renderAdvanced(); renderStatus(); renderSteps(); changed(); toast(msg, 5000);
+  return true;
+}
 function tasteText() {
   if (!ST.taste) return '⚪ –';
   return tasteOn() ? `🟢 Trained on ${ST.taste.pos}+ / ${ST.taste.neg}− marks${ST.taste.implicit ? ` + ${ST.taste.implicit} passed-over papers (×${ST.taste.weight})` : ''} (taste:−2…+4 on every score)`
@@ -2264,17 +2425,22 @@ function renderAdvanced() {
     h('h3', {}, '🗓️ Schedule'),
     h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, 'Friday times: ⏰ Friday Schedule in Step 2.'),
     h('h3', {}, '🔑 Optional boosters'),
-    h('div', {class: 'kv'}, h('b', {}, 'IEEE API'), h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set' : '⚪ not set (optional): set the IEEE_API_KEY environment variable; README → “Free IEEE API key”'),
-      h('b', {}, 'Claude AI'), h('span', {}, env.has_claude ? `🟢 Ready (${env.claude_command})` : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work)'),
-      h('b', {}, 'Taste model'), h('span', {}, tasteText())),
-    env.has_ieee_key ? null : h('details', {class: 'how'}, h('summary', {}, '💡 How to set IEEE_API_KEY (optional)'), h('div', {class: 'small'},
-      h('p', {}, 'A free key from developer.ieee.org adds abstracts and IEEE citation counts for the newest papers and back-fills older months. Without it the radar runs on Crossref + OpenAlex.'),
-      h('p', {}, 'Windows (PowerShell), once: ', h('code', {}, 'setx IEEE_API_KEY "<your key>"'), ' · macOS / Linux: add ', h('code', {}, 'export IEEE_API_KEY="<your key>"'), ' to ~/.zshrc or ~/.bashrc.'),
-      h('p', {}, 'Then close and start Start_Radar_GUI (or the radar server) again so it sees the key.' + (STARTER ? '' : ' On the Minisforum radar the key lives in .env next to briefing.py.')))),
+    h('div', {class: 'kv boosters'}, h('b', {}, 'IEEE API'), ieeeRow(env),
+      h('b', {}, 'Claude AI'), claudeRow(env),
+      h('b', {}, 'Taste model'), h('span', {}, tasteText(), ' ',
+        h('a', {class: 'btn small', href: 'DASHBOARD.html', target: '_blank', rel: 'noopener', title: 'Open DASHBOARD.html: ✅ / ⭐ / 📌 / 🗄️ there train the taste model'}, '📊 Review Marks in Dashboard ↗'),
+        h('div', {class: 'muted small'}, 'It learns from what you like (✅ Select, ⭐ Cite, 📌 pins) and pass on (🗄️ Archive). Mark a few more papers in the dashboard: the next ▶ Run & Update sharpens every paper\'s −2…+4 taste score.'))),
+    h('details', {class: 'how'}, h('summary', {}, '💡 IEEE API key: how to get & set'), h('div', {class: 'small'},
+      h('p', {}, 'A free key from ', h('a', {href: 'https://developer.ieee.org/', target: '_blank', rel: 'noopener'}, 'developer.ieee.org'),
+        ' (register, then create a key for the "IEEE Xplore Metadata API") adds abstracts and IEEE citation counts for the newest papers and back-fills older months. Without it the radar runs on Crossref + OpenAlex.'),
+      h('p', {}, API ? '🔑 Set / Update Key above saves it on the radar computer (Windows: your user environment; macOS / Linux: .env next to briefing.py). It is never shown again, never stored in config.json or on this page.'
+                     : 'This page is not connected to the radar server, so set it in a terminal:'),
+      keyCmds())),
     h('p', {class: 'muted small'}, 'Keys are never shown or stored on this page: only whether they are set.'));
 }
 let AUTO = true;  // smart auto-collapse until the user opens or closes a step, or the live data has arrived
-function boosters() { const e = ST.env || {}; return (e.has_ieee_key ? 1 : 0) + (e.has_claude ? 1 : 0) + (tasteOn() ? 1 : 0); }  // v3.3.1
+function claudeOn() { return !!(ST.env.has_claude && ST.env.claude_enabled !== false); }  // v3.3.3: 🤖 Auto and the CLI is there
+function boosters() { const e = ST.env || {}; return (e.has_ieee_key ? 1 : 0) + (claudeOn() ? 1 : 0) + (tasteOn() ? 1 : 0); }  // v3.3.1
 function stepInfo() {
   const env = ST.env, dr = ST.data_repo, p = ST.pillars, T = ST.topics || {dives: []}, rr = (dr.read_repos || []).length;
   const pr = (D.presets || []).find(x => x.key === S.domain_preset);
@@ -2324,7 +2490,7 @@ document.querySelectorAll('.step-card>summary').forEach(x => x.addEventListener(
 // ---------- run bar + console ----------
 const RUN_TIPS = {
   rescore_and_seed: 'Saves your settings, re-scores every paper with your keywords/authors (--rescore), tops up each pillar to 10 candidates (--seed-pillars 5 --no-claude) and rebuilds DASHBOARD.html. 0 tokens, no API calls except a small Beyond-IEEE search.',
-  daily: 'One collection pass now (IEEE / Crossref / OpenAlex) and this week\'s report' + (ST.env.has_claude ? ' with digests (claude -p).' : ' (--no-claude: no Claude CLI found).') + ' On the report day it also finalizes the week.',
+  daily: 'One collection pass now (IEEE / Crossref / OpenAlex) and this week\'s report' + (claudeOn() ? ' with digests (claude -p).' : ST.env.has_claude ? ' (--no-claude: 🧮 0-Token only is set in Step 4).' : ' (--no-claude: no Claude CLI found).') + ' On the report day it also finalizes the week.',
   pull_data_repo: 'Read-only: fetch origin/main of ic-paper-radar-data, import every peer overlay, merge new/enriched papers into your store, adopt the external ones ≥ min_score, rebuild the dashboards. Nothing is pushed.',
   sync_data_repo: '--sync (offline Save-Marks files) then --sync-data-repo: pull, merge, export the clean union, write peers/<you>.json and push a real gain to your private data repo; then read the shared repos.',
   init_data_repo: '--init-data-repo: create (gh) or clone your private repo into paths.data_repo_dir, write the protocol files, your clean corpus and your overlay, push main, and set data_repo.remote_url.',
@@ -2580,7 +2746,7 @@ function topicStatic(lines) {
 function topicRun(a) {
   const q = (TQ || '').replace(/\s+/g, ' ').trim();
   if (q.length < 3) return alert('Type a topic or research question first.');
-  const zero = TZERO || !ST.env.has_claude;
+  const zero = TZERO || !claudeOn();
   TLAST = {a, q, slug: topicSlug(q)};
   const ty = S.topic || {};
   if (!API) return topicStatic([`${pyCmd()} briefing.py ${a === 'topic_recall' ? '--recall' : '--topic'} "${q.replace(/"/g, "'")}"` +
@@ -2783,7 +2949,7 @@ function addPillarWizard(pre) {
 
 function renderTopic() {
   const el = $('#c-topic'); if (!el) return;
-  const T = ST.topics || {dives: [], recalls: []}, noClaude = !ST.env.has_claude;
+  const T = ST.topics || {dives: [], recalls: []}, noClaude = !claudeOn();
   const inp = ta({class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
     oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }}, {single: ' ', enter: () => topicRun('topic_dive')});
   const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
