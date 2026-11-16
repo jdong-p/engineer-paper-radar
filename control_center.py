@@ -1524,7 +1524,7 @@ def api_get(path, query, jobs):
         cfg = load_cfg()
         groups, limit = topic.parse_query(str((query.get("q") or [""])[0])[:300], cfg)
         show = [[t.split("::")[0][3:] if t.startswith("re:") else t for t in g[:4]] for g in groups]
-        return 200, {"ok": True, "groups": show, "limit_nw": limit}
+        return 200, {"ok": True, "groups": show, "limit_nw": limit, "hits": topic.group_hits(groups, cfg)}  # v3.4.1
     if path == "/api/check_updates":  # v3.2.0: 🚀 new radar version / 🔔 shared repo update banners
         cfg = load_cfg()
         return 200, {"ok": True, **check_updates(cfg, force=(query.get("force") or [""])[0] == "1"),
@@ -2044,7 +2044,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.4.0</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.4.1</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -2859,8 +2859,14 @@ function topicPreview() {  // v3.0.7: the concept groups topic.py will search fo
     const q = (TQ || '').trim(); if (q.length < 3) { el.textContent = ''; return; }
     let r; try { r = await call('GET', '/api/topic_parse?q=' + encodeURIComponent(q)); } catch (e) { return; }
     if (!r.ok) return;
-    el.textContent = r.groups.length ? 'Concept groups (a paper needs all but one): ' + r.groups.map(g => '(' + g.join(' | ') + ')').join(' AND ') +
-      (r.limit_nw ? ` · power ≤ ${r.limit_nw} nW boosts relevance` : '') : 'No concept words found: add a few specific terms.';
+    if (!r.groups.length) { el.textContent = 'No concept words found: add a few specific terms.'; return; }
+    const hits = r.hits || [];  // v3.4.1: local FTS5 hits per concept group; 0 = probably a typo
+    const zero = r.groups.filter((g, i) => hits[i] === 0).map(g => g[0]);
+    fill(el, 'Concept groups (a paper needs all but one): ', r.groups.map((g, i) => [i ? ' AND ' : '',
+      h('span', {class: hits[i] === 0 ? 'warn' : ''}, '(' + g.join(' | ') + ')'),
+      hits[i] == null ? '' : hits[i] === 0 ? h('b', {class: 'warn'}, ' ⚠️ 0 local hits — check spelling?') : h('span', {class: 'muted'}, ` [${fmt(hits[i])}]`)]),
+      r.limit_nw ? ` · power ≤ ${r.limit_nw} nW boosts relevance` : '',
+      zero.length ? h('div', {class: 'warn'}, `⚠️ ${zero.join(', ')}: not in any paper of your store. A dive needs all concepts but one, so a misspelt word can leave it empty.`) : null);
   }, 350);
 }
 function promoteDive(t) {

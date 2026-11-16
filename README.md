@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.4.0)
+# 📡 Engineer Paper Radar (v3.4.1)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -31,10 +31,16 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 `STARTUP.html` 配置和运行，用 `DASHBOARD.html` 阅读和标记。`config.json`、数据库和 `output/` 只在你的电脑上，不进 Git。
 团队可选用私有数据仓库共享干净语料和各自的标记。每周五：07:00 拉取并在本地生成周报，上午整理，12:00 上传。
 
-## ✨ What's new in v3.4.0
-*v3.4.0 亮点*
+## ✨ What's new in v3.4.1
+*v3.4.1 亮点*
 
-1. **🧮 0-token digests with an optional 🔍 Claude audit (v3.4.0):** every paper on your radar now gets a
+1. **🔎 Tidier Topic Dives & a typo guard (v3.4.1):** the dashboard's 🔎 Topic Dives bar is one line: **All Dives**,
+   one drop-down with every dive's full question, date and paper count (🏺 retired dives in their own group) and a
+   single **📄 Open Topic Report** (the selected dive, or the newest one). In `STARTUP.html` the dive preview shows
+   how many papers in your store match each concept and flags a word with **⚠️ 0 local hits — check spelling?**;
+   spellings like `lowpower` / `sub threshold` are normalised, and a dive that finds nothing is no longer saved.\
+   面板的专题栏合并为一行下拉菜单和一个报告按钮；预览会提示本地 0 命中的拼写错误，找不到论文的专题不再保存为空条目。
+2. **🧮 0-token digests with an optional 🔍 Claude audit (v3.4.0):** every paper on your radar now gets a
    structured digest (✅ silicon / ⚠️ simulation verdict, pillar, core innovation, key metrics, suggested focus)
    drafted **on your computer from its abstract, at 0 tokens** (`drafter.py`, pure Python). Pick a mode in
    `STARTUP.html` → Step 5 → 🔑 Optional boosters → **Claude AI** (`config.json` → `claude.mode`):
@@ -49,7 +55,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    每篇论文都会在本机根据摘要**以 0 token 生成结构化摘要**（硅验证/仿真判定、方向、核心创新、关键指标）。在第 5 步 →
    Claude AI 选择模式：🧮 仅本地草稿；🔍 混合审核（只让 Claude haiku 检查不确定的草稿和每次的前 3 篇，我们的测试中省约
    60–85 % token）；🤖 全部由 Claude 撰写（本模板默认）。面板中的 ✨ AI Refine 可按需为单篇论文生成完整的 Claude 摘要。
-2. **🧩 `STARTUP.html` in 5 steps (v3.4.0):** Steps 1–3 are the core setup. The old Step 4 is split in two:
+3. **🧩 `STARTUP.html` in 5 steps (v3.4.0):** Steps 1–3 are the core setup. The old Step 4 is split in two:
    **Step 4 · Topic Deep-Dive & Store Search** (🔎 topic dives with Report / Promote / Retire / Restore / Delete,
    and the ⚡ FTS5 instant search; its header shows e.g. `🔎 2 Active Dives · ⚡ FTS5 Ready`) and
    **Step 5 · Advanced Settings & Boosters** (🔑 IEEE API key, Claude AI mode, taste model, 🖥️ deployment, and a
@@ -57,7 +63,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `STARTUP.html#topic-dive` opens Step 4, `#c-advanced` opens Step 5.\
    `STARTUP.html` 现在分 5 步：第 1–3 步为核心设置；第 4 步为专题深挖与全文搜索；第 5 步为高级设置与增强（IEEE 密钥、
    Claude 模式、口味模型、部署方式，以及指向第 1 步期刊会议和第 2 步计划的一行链接）。
-3. **🔑 Optional boosters you can switch on from the page (v3.3.3):** in `STARTUP.html` → Step 5 (Step 4 before v3.4.0),
+4. **🔑 Optional boosters you can switch on from the page (v3.3.3):** in `STARTUP.html` → Step 5 (Step 4 before v3.4.0),
    - **IEEE API → 🔑 Set / Update Key:** paste a free key from [developer.ieee.org](https://developer.ieee.org/).
      It is saved on the radar computer only (Windows: your user environment; macOS / Linux: a git-ignored `.env`
      next to `briefing.py`), never in `config.json`, and never shown again: the page only knows whether a key is set.
@@ -67,12 +73,12 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    - **Taste model → 📊 Review Marks in Dashboard:** the taste score (−2…+4) learns from your ✅ / ⭐ / 📌 and 🗄️
      marks; mark a few more papers and the next ▶ Run & Update uses them.\
    第 5 步（v3.4.0 之前为第 4 步）可直接设置 IEEE API 密钥（只保存在本机，页面与 config.json 中都不会出现）、选择 Claude 摘要模式（见第 1 条），并可跳转到面板查看用于口味模型的标记。
-4. **⚡ Run & Update in seconds (v3.3.2):** re-scoring a 10,000-paper store takes about 3 s instead of about
+5. **⚡ Run & Update in seconds (v3.3.2):** re-scoring a 10,000-paper store takes about 3 s instead of about
    100 s (the same scores, checked paper by paper). **▶ Run & Update Dashboard** is one step that prints its
    progress as it goes, and finishes in about 6 s. A run can be ended with **⏹ Stop / Unlock** in its console, and
    the page unlocks its buttons by itself even when the server briefly stops answering.\
    重新评分 1 万篇论文从约 100 秒降到约 3 秒（结果完全相同）；▶ Run & Update 约 6 秒完成并实时显示进度，可用 ⏹ Stop / Unlock 中止。
-5. **🏺 Full pillar life cycle (v3.3.1):** Step 3 lists every pillar with its label, keyword and paper counts and
+6. **🏺 Full pillar life cycle (v3.3.1):** Step 3 lists every pillar with its label, keyword and paper counts and
    **🏺 Retire** / **🗑 Delete** buttons; retired pillars appear under **🏺 Retired / Antique Pillars** with
    **↺ Restore** (its label, keywords and papers come back as the last pillar, then a re-score fills it) and
    **🗑 Drop Antique Tag**. 🗑 Delete removes a pillar without an antique: unreviewed candidates go back to the
@@ -81,7 +87,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    A disconnected page now says so and offers **🔄 Reconnect**, and Step 5 (Step 4 before v3.4.0) shows how many
    of the 3 boosters are active.\
    第 3 步可直接 🏺 停用、🗑 删除任一方向；停用的方向可 ↺ 恢复或 🗑 去掉标记；重新排序时论文跟随原方向。
-6. **📚 Watched Venues in Step 1 (v3.3.0):** `STARTUP.html` → Step 1 shows the journals and conferences the radar
+7. **📚 Watched Venues in Step 1 (v3.3.0):** `STARTUP.html` → Step 1 shows the journals and conferences the radar
    fetches as cards (📖 Journal + ISSN, or 🎤 Conf + its title pattern), each with a **⭐ Flagship** toggle and
    **✕ Remove** (your papers stay). Add venues from the **📋 Quick-Pick Catalog** (34 IC / ECE venues: RF / mmWave,
    power, digital / EDA, devices, sensors, MEMS, photonics) or look one up by ISSN, title or conference name.
@@ -90,13 +96,13 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    for DAC can't pick up ASP-DAC ([details](#watched-venues)).\
    **第 1 步 · 📚 关注的期刊与会议**：以卡片显示，可设 ⭐ 旗舰、✕ 移除（已有论文保留）；可从 📋 精选目录（34 个 IC / ECE
    期刊会议）添加，或按 ISSN、刊名、会议名查找。添加前通过 Crossref / OpenAlex 实时核对并请你确认。
-7. **🟢 SYNC ▾ and 📥 REF EXPO ▾ (v3.3.0):** the dashboard header is shorter. One **SYNC** pill covers the radar
+8. **🟢 SYNC ▾ and 📥 REF EXPO ▾ (v3.3.0):** the dashboard header is shorter. One **SYNC** pill covers the radar
    server, your shared data repo and updates, and turns 🟢 when all of them are in sync (with the age of your last
    repo pull, e.g. `🟢 SYNC 2 d`); its menu holds 💾 Save Marks, the last pull / sync time, each repo's newest
    commit and any new version or PR. **REF EXPO** holds both BibTeX exports. **📚 Switch Radar / Repo ▾** and
    each peer page show when every radar was last updated.\
    面板顶栏更紧凑：**SYNC** 合并了服务器、共享仓库与更新状态，全部同步时显示 🟢；**REF EXPO** 合并了两个 BibTeX 导出。
-8. **📅 Your own year boundaries (v3.2.3):** the 🔎 Topic Deep-Dive card has compact inputs for the
+9. **📅 Your own year boundaries (v3.2.3):** the 🔎 Topic Deep-Dive card has compact inputs for the
    **earliest year** (papers before it are ignored by dives and recalls; blank = all years), the
    **🏛️ classics / 🚀 recent split year** (default 2023) and **how many** of each (default 6 + 8). Step 3 sets the
    **⏪ Weekly Catch-up & Seed earliest year** (`catch_up.since`, default 2025). From a terminal:
@@ -104,13 +110,13 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    专题深挖卡片可设置最早年份（更早的论文不参与专题和检索，留空 = 不限）、经典 / 近期分界年份和各自篇数；第 3 步可设置
    ⏪ 每周补录与种子的最早年份。命令行可用 `--min-year` / `--split-year` 临时调整。
-9. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
+10. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
    what's missing (Git, Python), clones the radar, asks two optional questions and opens `STARTUP.html`; see
    [One-command install](#one-command-install). `python install.py --doctor` checks your setup and prints the
    exact fix for anything missing.\
    一行命令完成安装：自动安装缺少的 Git / Python、克隆项目、回答两个可选问题并打开 `STARTUP.html`。
    `python install.py --doctor` 检查环境，并给出缺失项的修复命令。
-10. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
+11. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
    - `STARTUP.html` tells you when GitHub has a **new radar version** (🚀 … **⬆️ Update Radar Now**: a
      `git pull`; a ZIP copy is turned into a Git clone and keeps your `config.json`, store and `output/`) and
      when a teammate pushed to your **shared repo** (🔔 … **📥 Pull Updates Now**). The dashboard shows a quiet
@@ -127,7 +133,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `output/`）以及共享仓库的新提交（📥 一键拉取）。在第 2 步填写 `remote_url` 并保存即自动克隆。**⏰ 周五计划**：
    07:00 拉取并在本地生成周报，12:00 上传干净语料和你周五上午的标记，时间可调，**⏰ Save & Apply** 写入系统计划任务。
    取消勾选 **🏷️ 共享标签** 后，下次同步会从共享仓库删除你的 `peers/<id>.json`，干净论文照常同步。
-11. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+12. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** (5 since v3.4.0) that fold away once they are complete, each with its own buttons. Larger type, and
@@ -136,7 +142,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    DOIs can be pasted several at once, one per line or comma-separated.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤（v3.4.0 起为 5 个），完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。
-12. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+13. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
    folder (`git pull`) and it runs.
@@ -147,21 +153,21 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
    只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-13. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+14. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-14. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+15. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-15. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+16. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers by default) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-16. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+17. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
 ### The v3.0 foundation (v3.0.2)

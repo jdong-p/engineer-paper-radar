@@ -71,26 +71,66 @@ def slugify(q):
     return re.sub(r"[^a-z0-9]+", "-", q.lower()).strip("-")[:60]
 
 
+# v3.4.1: IC spellings made uniform before the split ("lowpower" → "low-power", "sub threshold" → "subthreshold")
+COMPOUNDS = ((r"\bsub[\s-]?threshold\b", "subthreshold"), (r"\blow[\s-]?power\b", "low-power"),
+             (r"\bultra[\s-]?low\b", "ultra-low"), (r"\bon[\s-]?chip\b", "on-chip"))
+VARIANTS = {"subthreshold": ["subthreshold", "sub-threshold", "weak inversion"]}
+
+
 def parse_query(q, cfg):
-    """→ (concept groups [[terms]], power ceiling in nW or None)."""
+    """→ (concept groups [[terms]], power ceiling in nW or None). v3.4.1: COMPOUNDS normalised first; a hyphenated
+    modifier of three or more words ("leakage-current-biased") becomes one concept per word, unless it is a
+    configured synonym; two-word compounds ("switched-capacitor") stay one phrase (space or hyphen both match)."""
     tc = cfg["topic"]
     limit = None
+    for rx, to in COMPOUNDS:
+        q = re.sub(rx, to, q, flags=re.I)
     m = re.search(r"sub-?\s?(\d+(?:\.\d+)?)\s?(pW|nW|µW|μW|uW)", q, re.I)
     if m:
         unit = next(u for u in UNIT_NW if u.lower() == m[2].lower())
         limit = float(m[1]) * UNIT_NW[unit]
         q = q.replace(m[0], " ")
     groups, seen = [], set()
+    syns = tc["synonyms"]
     for tok in re.findall(r"[A-Za-z][A-Za-z0-9-]+", q):
         base = re.sub(r"^ultra-", "", re.sub(r"^low-", "", tok.lower()))
-        if base in tc["generic_words"] or base in seen or len(base) < 3:
-            continue
-        seen.add(base)
-        syn = tc["synonyms"].get(base) or tc["synonyms"].get(base.rstrip("s"))
-        groups.append(syn or [base])
+        parts = [base]
+        if base.count("-") >= 2 and base not in syns and base.replace("-", " ") not in syns:
+            parts = [x for x in base.split("-") if x]
+        for b in parts:
+            if b in tc["generic_words"] or b in seen or len(b) < 3:
+                continue
+            seen.add(b)
+            syn = syns.get(b) or syns.get(b.rstrip("s"))
+            groups.append(syn or VARIANTS.get(b) or [b])
     if limit is not None:
         groups.append(["re:power::\\d\\s?-?\\s?(nW|pW)\\b", "nanowatt", "picowatt", "ultra-low-power", "ultra-low power"])
     return groups, limit
+
+
+def group_hits(groups, cfg):
+    """v3.4.1: papers in the local store matching each concept group (FTS5, read only; None for a regex-only group
+    or without an FTS index), for STARTUP.html's live preview: a 0 usually means a typo."""
+    import sqlite3
+    import store as store_mod
+    sp = fetcher.HERE / cfg["paths"]["store_file"]
+    out = [None] * len(groups)
+    if not sp.exists():
+        return out
+    try:
+        c = sqlite3.connect(f"file:{sp.as_posix()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return out
+    try:
+        for i, g in enumerate(groups):
+            q = store_mod.fts_any(g)
+            if q:
+                out[i] = c.execute("SELECT COUNT(*) FROM papers_fts WHERE papers_fts MATCH ?", (q,)).fetchone()[0]
+    except sqlite3.Error:
+        pass
+    finally:
+        c.close()
+    return out
 
 
 def _powers_nw(text):
@@ -455,6 +495,13 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
     classic, recent = select(list(found.values()), cfg)
     log(f"  IEEE topic calls today: {store.calls_today('ieee_topic')}/{tc['ieee_topic_reserve']}; "
         f"selected {len(classic)} classics + {len(recent)} recent")
+    if not classic and not recent:  # v3.4.1: no empty "0 papers" dive in meta['topics'], no empty report
+        hits = group_hits(groups, cfg)
+        zero = [g[0] for g, n in zip(groups, hits) if n == 0]
+        log(f"⚠️ No paper matched “{query}”: nothing saved (no topic dive, no report)."
+            + (f" These words have 0 hits in your store, check the spelling: {', '.join(zero)}." if zero else
+               " Try fewer or broader words (a paper must match all concepts but one)."))
+        return None
 
     # store everything relevant (new rows: status 'topic'), remember the selection
     for p in found.values():

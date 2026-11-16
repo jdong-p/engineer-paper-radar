@@ -159,7 +159,8 @@ gap:4px;min-width:230px;max-height:75vh;overflow-y:auto;box-shadow:0 8px 24px rg
 .sibtn{padding:1px 7px;font-size:13px}.sibtn.user{border-color:var(--accent)}.sibtn sup{font-size:9px;color:var(--accent)}
 .tagpill{cursor:pointer;opacity:.75}.tagpill:hover{opacity:1}
 .topicbar{background:var(--chip)}a.btn.newdive{text-decoration:none;border-style:dashed;color:var(--muted)}.topicbar a.btn{text-decoration:none}.tag.tlink{cursor:pointer;color:var(--accent)}
-.tier3{background:var(--bg);padding-top:6px;padding-bottom:6px}.tlabel{align-self:center}.push{flex:1}
+.tier3{background:var(--bg);padding-top:6px;padding-bottom:6px}
+select.divesel{max-width:min(52vw,560px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}select.divesel option{white-space:normal}.tlabel{align-self:center}.push{flex:1}
 .tag.antique{background:transparent;border:1px dashed var(--line);color:var(--muted)}
 .tag.notetag{background:var(--citebg);color:var(--fg);font-weight:600}
 .noteline{display:flex;flex-wrap:wrap;align-items:center;gap:6px}input.note{flex:1;min-width:220px;max-width:640px;
@@ -175,7 +176,7 @@ tr.banner td{background:var(--chip);font-weight:600;font-size:14.5px;border-top:
 tr.subbanner td{color:var(--muted);font-size:12.5px;font-weight:600;padding:4px 8px}
 .cur{display:inline-flex;gap:6px;margin:4px 0}.pill.live{border-color:var(--ok);color:var(--ok)}
 .pill.offline{border-color:var(--warn);color:var(--warn)}blockquote{border-left:3px solid var(--accent);margin:8px 0;padding:2px 12px;color:var(--muted)}
-@media (max-width:700px){.hide-sm{display:none}main,.filters,header.bar{padding-left:10px;padding-right:10px}.report{padding:8px 12px}}
+@media (max-width:700px){select.divesel{font-size:16px;max-width:calc(100vw - 150px)}.hide-sm{display:none}main,.filters,header.bar{padding-left:10px;padding-right:10px}.report{padding:8px 12px}}
 .tag.ppill{white-space:nowrap;font-weight:600}.pnote,.msort,.msec{display:none}
 .pnote{margin:0 0 8px;padding:6px 10px;border-left:3px solid var(--accent);background:var(--chip);border-radius:6px;font-size:13.5px}
 @media (max-width:768px),(hover:none){.pnote.on{display:block}}
@@ -887,9 +888,9 @@ function statusBar() {
   if (!TIERED[view] || (view === 'topic' && !DIVES.length)) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = '';
   const n = s => P.filter(p => inTier2(p, view, wsel, topicSel) && stageOk(p, s)).length;
-  const scope = view === 'weekly' ? (wsel === 'all' ? 'All Weekly' : GROUP_LABEL[wsel])
-                                  : (topicSel === 'all' ? 'All dives' : '🔎 ' + (DIVE[topicSel] || {}).short);
-  el.innerHTML = `<span class="muted tlabel">${esc(scope)} · status:</span>` +
+  // v3.4.1: the topic picker right above shows the full dive title, so the stage row just says "Stage:"
+  const scope = view === 'weekly' ? (wsel === 'all' ? 'All Weekly' : GROUP_LABEL[wsel]) + ' · status:' : 'Stage:';
+  el.innerHTML = `<span class="muted tlabel">${esc(scope)}</span>` +
     SUBS.filter(([s]) => !SUB_MORE.includes(s)).map(([s, l]) =>
       `<button class="btn ${sub===s?'on':''}" ${s==='all'?'title="Everything except 🗄️ Archived"':''} onclick="setSub('${s}')">${l} <span class="muted count">${n(s)}</span></button>`).join('') +
     folder('submore', SUBS.filter(([s]) => SUB_MORE.includes(s)).map(([s, l]) => [s, l, n(s)]), sub, 'More', 'setSub');
@@ -921,14 +922,18 @@ function tier2() {
   }
   if (view === 'topic' && DIVES.length) {
     el.style.display = '';
-    const pill = (slug, label, title) => `<button class="btn ${topicSel===slug?'on':''}" title="${escA(title)}" onclick="showTopic('${slug}')">${label}</button>`;
+    // v3.4.1: All Dives · one <select> with every dive's full title (🏺 antique dives in their own group) · one report
+    const opt = t => `<option value="${t.slug}" ${topicSel===t.slug?'selected':''} title="${escA(t.query)}">` +
+      `${t.retired ? '🏺' : '🔎'} ${esc(t.query)} · ${t.date} (${t.papers.length})</option>`;
+    const cur = DIVE[topicSel];
+    const sel = `<select class="btn divesel" aria-label="Topic dive" title="${escA(cur ? cur.query : 'Pick one topic dive')}" onchange="showTopic(this.value)">` +
+      `<option value="all" ${cur ? '' : 'selected'}>🔎 Pick a dive… (${LIVE_DIVES.length} active${OLD_DIVES.length ? `, ${OLD_DIVES.length} 🏺` : ''})</option>` +
+      LIVE_DIVES.map(opt).join('') + (OLD_DIVES.length ? `<optgroup label="🏺 Past / Antique Dives">${OLD_DIVES.map(opt).join('')}</optgroup>` : '') + `</select>`;
+    const rep = cur || LIVE_DIVES.find(t => t.href);  // All Dives: the newest active dive's report
     el.innerHTML = `<span class="muted tlabel">🔎 Topic Dives:</span>` +
-      pill('all', `All dives <span class="muted count">${LIVE_DIVES.length}</span>`, 'every active topic dive') + LIVE_DIVES.map(t =>
-      pill(t.slug, `🔎 ${esc(t.short)} <span class="muted">· ${t.date} · ${t.papers.length} papers</span>`, t.query) +
-      (t.href ? `<a class="btn" href="${t.href}" target="_blank" title="${escA(t.query)}">📄 Open Topic Report</a>` : '')).join('') +
-      (OLD_DIVES.length ? folder('antdives', OLD_DIVES.map(t => [t.slug, `🏺 ${esc(t.short)} <span class="muted">· ${t.date}</span>`, t.papers.length]),
-        topicSel, `🏺 Past / Antique Dives (${OLD_DIVES.length})`, 'showTopic', '') : '') +
-      (DIVE[topicSel] && DIVE[topicSel].retired && DIVE[topicSel].href ? `<a class="btn" href="${DIVE[topicSel].href}" target="_blank">📄 Open 🏺 Report</a>` : '') + newDive;
+      `<button class="btn ${cur ? '' : 'on'}" title="Every active topic dive" onclick="showTopic('all')">All Dives <span class="muted count">${LIVE_DIVES.length}</span></button>` +
+      sel + `<span class="push"></span>` +
+      (rep && rep.href ? `<a class="btn" href="${rep.href}" target="_blank" title="${escA((cur ? '' : 'Newest dive: ') + rep.query)}">📄 Open Topic Report</a>` : '') + newDive;
     return;
   }
   el.style.display = 'none'; el.innerHTML = '';
