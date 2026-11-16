@@ -38,6 +38,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -517,6 +518,9 @@ def backup_store(store, cfg, log=print):
         log(f"Store backup failed (previous backup kept): {e}")
 
 
+T0 = time.time()  # v3.3.2: "Done in N s." at the end of a Control Center action
+
+
 def main():
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8")
@@ -553,6 +557,12 @@ def main():
     ap.add_argument("--unretire-topic", metavar="SLUG", help="↺ restore a retired topic dive")
     ap.add_argument("--retire-pillar", type=int, metavar="N", help="🏺 retire pillar N: its papers keep a 🏺 badge, marks, notes "
                     "and digests; its keywords leave config.json (saved in _system/retired_pillars_config.json) (v3.0.8)")
+    ap.add_argument("--unretire-pillar", metavar="KEY", help="↺ restore a 🏺 retired pillar (its antique key): it comes "
+                    "back as the last pillar with its label, keywords and papers (v3.3.1); add --rescore --seed-pillars 5")
+    ap.add_argument("--delete-pillar", type=int, metavar="N", help="🗑 delete pillar N without an 🏺 antique: its unreviewed "
+                    "candidates go back to the corpus, ✅ / ⭐ / 🏷️ / 📌 papers stay without a pillar (v3.3.1)")
+    ap.add_argument("--drop-antique-pillar", metavar="KEY", help="🗑 drop a retired pillar's 🏺 tag: its papers keep "
+                    "their marks and notes, without a pillar (v3.3.1)")
     ap.add_argument("--sync", action="store_true", help="apply ✅/⭐/🗄️ checkbox edits, refill the Beyond-IEEE board, "
                                                          "rewrite the catalog (a claude -p call only for new board papers)")
     ap.add_argument("--rescore", action="store_true", help="re-score every paper after a keyword/pillar change (0 calls)")
@@ -643,7 +653,8 @@ def main():
         return 0
     # one radar run at a time (run_lock.py): the scheduled tasks, terminal runs and the Control Center's jobs
     # wait for each other (up to 30 min) instead of working on the store / data-repo clone together
-    recall_only = a.recall and not (a.topic or a.drop_topic or a.retire_topic or a.unretire_topic or a.retire_pillar or a.sync or a.rescore or a.lineage or a.add or a.seed_pillars is not None
+    pillar_ops = a.unretire_pillar or a.delete_pillar or a.drop_antique_pillar  # v3.3.1
+    recall_only = a.recall and not (a.topic or a.drop_topic or a.retire_topic or a.unretire_topic or a.retire_pillar or pillar_ops or a.sync or a.rescore or a.lineage or a.add or a.seed_pillars is not None
                                     or any(getattr(a, f) for f in curation.ACTIONS))
     if not recall_only:
         busy = run_lock.acquire(sys.argv[1:])
@@ -680,6 +691,10 @@ def main():
     scorer.prepare(store, cfg)  # v3.0: coupling core + taste model from this store's marks
     topic_dir = Path(cfg["paths"]["topic_dir"])
 
+    if a.adopt_external and (a.rescore or a.seed_pillars is not None):
+        # v3.3.2: ▶ Run & Update in one process (one scorer.prepare): adopt, then go on to --rescore / --seed-pillars
+        print(f"Adopted {adopt_external(store, cfg)} external papers into the archive (≥ min_score)", flush=True)
+        a.adopt_external = False
     # sharing (v2.16): stand-alone actions, no collection / report
     if (a.merge_store or a.adopt_external or a.export_share is not None or a.sync_data_repo or a.pull_data_repo
             or a.init_data_repo):
@@ -727,16 +742,29 @@ def main():
             refresh_catalog()
             print(f"Dashboard: {Path(cfg['paths']['onedrive_root']) / 'DASHBOARD.html'}")
         return 0
+    if a.unretire_pillar:  # v3.3.1 ↺ Restore: before --rescore / --seed-pillars, which then use its keywords
+        import retire
+        try:
+            retire.unretire_pillar(store, cfg, a.unretire_pillar)
+        except ValueError as e:
+            print(f"[retire] {e}", file=sys.stderr)
+            return 1
+        cfg = fetcher.load_config()  # the pillar and keywords just written back
     if a.rescore:
-        fetcher.rescore_all(cfg, store)
+        fetcher.rescore_all(cfg, store, log=lambda m: print(m, flush=True))
     if a.lineage:
         print(f"Lineage: {relations.catalog_lineage(cfg, store, today)} new conference ↔ journal links")
-    if a.retire_topic or a.unretire_topic or a.retire_pillar:  # v3.0.8: 🏺 Retire as Antique (retire.py)
+    if a.retire_topic or a.unretire_topic or a.retire_pillar or a.delete_pillar or a.drop_antique_pillar:  # retire.py
         import retire
         try:
             if a.retire_pillar:
                 retire.retire_pillar(store, cfg, a.retire_pillar)
                 cfg = fetcher.load_config()  # the pillars and keywords just written
+            if a.delete_pillar:  # v3.3.1 🗑 Delete (no 🏺 antique)
+                retire.delete_pillar(store, cfg, a.delete_pillar)
+                cfg = fetcher.load_config()
+            if a.drop_antique_pillar:  # v3.3.1 🗑 Drop Antique Tag
+                retire.drop_antique(store, cfg, a.drop_antique_pillar)
             if a.retire_topic or a.unretire_topic:
                 retire.set_topic_retired(store, a.retire_topic or a.unretire_topic, bool(a.retire_topic))
         except ValueError as e:
@@ -774,8 +802,11 @@ def main():
         if a.add and not added:
             return 1
         if a.seed_pillars is not None:
-            n = catalog.pillar_replenish(store, cfg, week, None if a.seed_pillars < 0 else a.seed_pillars)
-            print("Seed: " + pillar_line(n))
+            print("Seeding pillars…", flush=True)
+            # v3.3.2: right after --rescore the stored scores are fresh: rank by them instead of scoring again
+            n = catalog.pillar_replenish(store, cfg, week, None if a.seed_pillars < 0 else a.seed_pillars,
+                                         fresh=not a.rescore)
+            print("Seed: " + pillar_line(n), flush=True)
             print(f"Beyond pool: {fetcher.pool_search(cfg, store, today)} gate-passing papers searched")
         if not a.no_claude:
             try:
@@ -786,14 +817,15 @@ def main():
             except Exception as e:
                 print(f"Digest failed (retried next run): {e}", file=sys.stderr)
     if a.sync or marks or a.rescore or a.lineage or a.recall or a.topic or a.drop_topic or a.retire_topic \
-            or a.unretire_topic or a.retire_pillar or a.add or a.seed_pillars is not None:
+            or a.unretire_topic or a.retire_pillar or pillar_ops or a.add or a.seed_pillars is not None:
         if a.dry_run:
             return 0
         board = a.sync or marks or a.rescore or a.lineage or a.add or a.seed_pillars is not None  # not --recall/--topic
         refilled = {}
-        if board:  # a mark may have dropped a pillar below the water mark, or freed a board slot
-            refilled = catalog.pillar_replenish(store, cfg, week)
-            print("Pillar replenish: " + pillar_line(refilled))
+        if board:  # (v3.3.2: no second scoring pass after --rescore) a mark may have dropped a pillar below the water mark, or freed a board slot
+            print("Replenishing pillars…", flush=True)
+            refilled = catalog.pillar_replenish(store, cfg, week, fresh=not a.rescore)
+            print("Pillar replenish: " + pillar_line(refilled), flush=True)
             print(f"Beyond board: +{fetcher.beyond_replenish(cfg, store, week)} from the pool")
         if board and not a.no_claude:
             try:  # the board's new papers (and the replenished / seeded IEEE papers, ≤ digests_per_day_max)
@@ -803,7 +835,9 @@ def main():
                     digest_beyond(store, cfg, print)
             except Exception as e:
                 print(f"Digest failed (retried next run): {e}", file=sys.stderr)
+        print("Rebuilding DASHBOARD.html & STARTUP.html…", flush=True)
         refresh_catalog()
+        print(f"Done in {time.time() - T0:.1f} s.", flush=True)
         return 0
 
     # The daily pipeline only uses public APIs (IEEE Metadata API, Crossref, OpenAlex), and IEEE

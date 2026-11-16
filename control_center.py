@@ -18,6 +18,8 @@ API (JSON):
                             _system/config.backup.json)
   POST /api/verify_venue  ← {"catalog": short} | {"query", "type", "short", "regex"} | {"suggest": name}: a venue
                             checked live against Crossref + OpenAlex (venues.verify) for the confirmation modal
+  POST /api/cancel_job    ← {"force"?: bool}: ⏹ Stop / Unlock (v3.3.2): ends this server's job (its briefing.py process
+                            tree); with force also a run this page didn't start; a lock left by a dead run is cleared
   POST /api/run           ← {"action": "rescore_and_seed" | "pull_data_repo" | "sync_data_repo" | "daily",
                              "config"?: {...}, "clone_url"?, "clone_dir"?}: saves the config, then runs briefing.py
                             in a background worker (one job at a time)
@@ -90,14 +92,21 @@ GIT_TIMEOUT = 4        # s: one git ls-remote; a slow or offline network never h
 DEPLOYMENTS = ("local", "mesh_lan")  # 🏢 enterprise is only an easter egg in STARTUP.html
 HOST_RX = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,99}$")
 ARXIV_KEYS = ("enabled", "share", "queries", "categories", "must_all", "exclude_any")
-STARTER_ONLY = {"arxiv"}  # v3.0.7: the Minisforum radar edits pillars too (P1–P4 fixed, P5+ added after them)
+STARTER_ONLY = {"arxiv"}  # the Minisforum radar edits pillars too (v3.3.1: all of them, P1–P4 included)
 
 
 def fixed_pillars():
-    """How many leading pillars can't be renamed / moved / removed: 0 in the Starter, catalog.FIXED_PILLARS (4) on
-    the Minisforum radar, whose en-v3 digests and prompts name them."""
+    """How many leading pillars can't be renamed / moved / removed: 0 everywhere since v3.3.1 (the Minisforum radar
+    fixed P1–P4 before; retire.remap_papers now keeps their cached en-v3 digests valid through any renumbering)."""
+    return 0
+
+
+def pillar_list(cfg):
+    """The saved pillar names in order (config.json, or the radar's 4 original pillars)."""
     import catalog
-    return 0 if STARTER else getattr(catalog, "FIXED_PILLARS", 0)
+    if STARTER:
+        return [str(x) for x in cfg.get("pillars") or []]
+    return catalog.pillar_names()
 
 DOI_RX = re.compile(r"^10\.\d{4,9}/[^\s\"<>]+$")
 EMAIL_RX = re.compile(r"^[^@\s\"<>]+@[^@\s\"<>]+\.[A-Za-z]{2,}$")
@@ -318,10 +327,12 @@ def validate(upd, cfg):
                 names = _texts(v, "pillars", maxn=MAX_PILLARS, maxlen=120, dedupe=False)
                 if len(set(n.lower() for n in names)) < len(names):
                     raise ValueError("pillars: two pillars have the same name")
-                fx = fixed_pillars()
-                if fx and names[:fx] != list(catalog.DEFAULT_PILLARS):
-                    raise ValueError(f"pillars: pillars 1–{fx} are fixed on this radar (their cached digests name them); "
-                                     "add new pillars after them")
+                old = pillar_list(cfg)
+                if old and not names:
+                    raise ValueError("pillars: keep at least one pillar")
+                if len(names) < len(old):  # v3.3.1: a saved pillar leaves through 🏺 Retire or 🗑 Delete only
+                    raise ValueError("pillars: a saved pillar can't be removed by saving; use 🏺 Retire (keeps its papers "
+                                     "as an antique) or 🗑 Delete in Step 3")
                 return names
             put(PATHS[k], pillars)
         elif k == "pillar_short":
@@ -899,7 +910,7 @@ def status(cfg):
     import catalog
     return {"edition": "starter" if STARTER else "radar", "generated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "store": st, "pillars": {"count": len([k for k in catalog.PILLARS if k]), "ready": bool(ready),
-                                     "keywords": n_kw},
+                                     "keywords": n_kw, "papers": _pillar_papers(cfg)},
             "env": {"has_ieee_key": bool(os.environ.get("IEEE_API_KEY", "").strip()), "has_claude": has_claude(cfg),
                     "claude_command": (cfg.get("claude") or {}).get("command") or "claude",
                     "has_git": shutil.which("git") is not None,
@@ -995,6 +1006,7 @@ ACTIONS = {"rescore_and_seed": "▶ Run & Update Dashboard", "pull_data_repo": "
            "topic_recall": "⚡ Instant Local Recall (0 API)", "topic_dive": "🔎 Run Full Topic Dive (6 Classics + 8 SOTA)",
            "drop_topic": "🗑 Delete Topic Dive", "add_pillar": "✅ Create Pillar & Seed Papers",
            "retire_topic": "🏺 Retire Topic Dive", "unretire_topic": "↺ Restore Topic Dive", "retire_pillar": "🏺 Retire Pillar",
+           "unretire_pillar": "↺ Restore Pillar", "delete_pillar": "🗑 Delete Pillar", "drop_antique_pillar": "🗑 Drop Antique Tag",
            "self_update": "⬆️ Update Radar Now", "clone_data_repo": "📦 Clone Shared Repo",
            "apply_schedule": "⏰ Save & Apply Friday Schedule"}
 TOPIC_ACTIONS = ("topic_recall", "topic_dive")
@@ -1016,9 +1028,14 @@ def plan(action, cfg, opts=None):
             "retire_topic": [["--retire-topic=" + str(o.get("slug") or "<slug>")]],  # v3.0.8: 🏺 Retire as Antique
             "unretire_topic": [["--unretire-topic=" + str(o.get("slug") or "<slug>")]],
             "retire_pillar": [["--retire-pillar", str(o.get("pillar") or "N")]],
+            # v3.3.1: ↺ Restore puts the pillar back, re-scores and refills its candidates (0 tokens)
+            "unretire_pillar": [["--unretire-pillar=" + str(o.get("key") or "<key>"), "--rescore", "--seed-pillars", "5",
+                                 "--no-claude"]],
+            "delete_pillar": [["--delete-pillar", str(o.get("pillar") or "N")]],
+            "drop_antique_pillar": [["--drop-antique-pillar=" + str(o.get("key") or "<key>")]],
             # v3.0.7 ＋ Add New Pillar: re-score with the new keywords, file its anchors under it, seed ≥ 10 candidates
             "add_pillar": [["--rescore", "--seed-pillars", "5", "--no-claude"]
-                           + (["--pillar", str(o.get("pillar") or "N"), "--pin-anchors", *o["anchors"]] if o.get("anchors") else [])],"rescore_and_seed": adopt + [["--rescore", "--seed-pillars", "5", "--no-claude"]],
+                           + (["--pillar", str(o.get("pillar") or "N"), "--pin-anchors", *o["anchors"]] if o.get("anchors") else [])],"rescore_and_seed": [(["--adopt-external"] if adopt else []) + ["--rescore", "--seed-pillars", "5", "--no-claude"]],  # v3.3.2: one process
             "pull_data_repo": [["--pull-data-repo"]],
             "self_update": [["--self-update"]], "clone_data_repo": [["--clone-data-repo"]],
             "apply_schedule": [["--apply-schedule"]],
@@ -1065,6 +1082,7 @@ class Jobs:
         self.lock = threading.Lock()
         self.n = 0
         self.child = None  # pid of the briefing.py this worker is running now
+        self.cancelled = False  # v3.3.2: ⏹ Stop / Unlock ends the job (no further steps of its plan)
         self.st = {"id": 0, "action": None, "running": False, "rc": None, "lines": [], "base": 0,
                    "started": None, "finished": None}
 
@@ -1090,10 +1108,26 @@ class Jobs:
             if self.st["running"]:
                 raise RuntimeError(f"busy: {ACTIONS[self.st['action']]} is still running")
             self.n += 1
+            self.cancelled = False
             self.st = {"id": self.n, "action": action, "running": True, "rc": None, "lines": [], "base": 0,
                        "started": datetime.now().isoformat(timespec="seconds"), "finished": None}
         threading.Thread(target=self._run, args=(action, opts or {}), daemon=True).start()
         return self.view()
+
+    def cancel(self):
+        """⏹ Stop / Unlock (v3.3.2): end the running job's briefing.py with its child processes. Its .run.lock then
+        names a dead process, which run_lock.holder() clears. True when there was a job to stop."""
+        with self.lock:
+            running = self.st["running"]
+        if not running:
+            return False
+        self.cancelled = True
+        pid = self.child
+        if pid:
+            kill_tree(pid)
+        self.log("⏹ Stopped (Stop / Unlock): the radar lock is released; nothing half-written stays in the store "
+                 "(SQLite keeps only committed changes)")
+        return True
 
     def _proc(self, cmd, show):
         self.log(f"$ {show}")
@@ -1148,6 +1182,8 @@ class Jobs:
                 rc = self._clone(opts)
             if not rc:
                 for args in plan(action, load_cfg(), opts):
+                    if self.cancelled:
+                        break
                     r = self._proc([python_exe(), "-u", str(HERE / "briefing.py"), *args],
                                    f"python briefing.py {' '.join(args)}".rstrip())
                     rc = r or rc  # like run_data_repo_sync.cmd: the last failure's code, else 0
@@ -1175,6 +1211,36 @@ class Jobs:
                 pass
 
 
+def kill_tree(pid):
+    """End a process and its children (v3.3.2: ⏹ Stop / Unlock)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True, timeout=20,
+                           creationflags=NO_WINDOW)
+        else:
+            import signal
+            os.kill(int(pid), signal.SIGTERM)
+    except Exception:
+        pass
+
+
+def cancel_job(jobs, force=False):
+    """POST /api/cancel_job: this server's job; with force also a run holding .run.lock that this server didn't
+    start (scheduled task, terminal). Returns the state the page needs to unlock its buttons."""
+    import run_lock
+    stopped = jobs.cancel()
+    ext = None if stopped else external_run(jobs)
+    killed = False
+    if ext and force and ext.get("pid"):
+        kill_tree(ext["pid"])
+        killed = True
+    for _ in range(20):  # the killed process is gone within a second or two; then its lock is stale
+        if not (jobs.view()["running"] or run_lock.holder()):
+            break
+        time.sleep(0.25)
+    return {"ok": True, "stopped": stopped, "killed_external": killed, "job": jobs.view(), "active": external_run(jobs)}
+
+
 def clone_needed(cfg):
     """v3.2.0: data_repo.remote_url is set but there is no clone at paths.data_repo_dir (or the default folder)."""
     import data_repo
@@ -1184,7 +1250,12 @@ def clone_needed(cfg):
 
 def _save(req):
     cfg = load_cfg()
-    changed = write_config(validate(req.get("config") or {}, cfg), cfg) if req.get("config") else []
+    changes = validate(req.get("config") or {}, cfg) if req.get("config") else []
+    old = pillar_list(cfg)
+    changed = write_config(changes, cfg) if changes else []
+    new = next((v for pth, v in changes if pth == PATHS["pillars"]), None)
+    if "pillars" in changed and new is not None and old and new[:len(old)] != old:
+        _remap_saved(cfg, old, new)  # v3.3.1: a reorder / rename moves each pillar's papers with it
     if changed:
         cfg = load_cfg()
         try:
@@ -1192,6 +1263,51 @@ def _save(req):
         except Exception:
             pass
     return cfg, changed
+
+
+def _remap_saved(cfg, old, new):
+    """retire.save_remap on the store (explicit papers.pillar values and digest-filed papers follow their pillar)."""
+    import retire
+    import store as store_mod
+    sp = HERE / cfg["paths"]["store_file"]
+    if not sp.exists():
+        return
+    st = store_mod.Store(sp)
+    try:
+        retire.save_remap(st, old, new, log=lambda m: None)
+    finally:
+        st.db.close()
+
+
+def _pillar_papers(cfg):
+    """{pillar number: papers filed under it that aren't plain corpus (candidate, reported, ✅, ⭐, 🏷️, 📌)}."""
+    import catalog
+    sp = HERE / cfg["paths"]["store_file"]
+    out = {}
+    if not sp.exists():
+        return out
+    kwmap = catalog._kw_pillars(cfg)
+    c = _ro(sp)
+    try:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(papers)")}
+        if not {"pillar", "retired_pillar", "digest", "hits"} <= cols:
+            return out
+        q = ("SELECT pillar, retired_pillar, digest, digest_ver, hits FROM papers WHERE COALESCE(grp,'ieee') != 'beyond' "
+             "AND retired_pillar IS NULL AND (status IN ('candidate','reported','pinned') OR COALESCE(user_mark,'normal') "
+             "!= 'normal' OR COALESCE(cited,0)=1 OR COALESCE(user_note,'') != '' OR pin IS NOT NULL)")
+        for pl, rp, dg, dv, hits in c.execute(q):
+            try:
+                hl = json.loads(hits) if hits else []
+            except ValueError:
+                hl = []
+            k = catalog.pillar_of({"pillar": pl, "retired_pillar": rp, "digest": dg, "digest_ver": dv, "hits": hl}, kwmap)
+            if k:
+                out[k] = out.get(k, 0) + 1
+    except sqlite3.Error:
+        pass
+    finally:
+        c.close()
+    return out
 
 
 def external_run(jobs):
@@ -1284,6 +1400,8 @@ def api_post(path, req, jobs):
         if path == "/api/plan_keywords":  # v3.0.5: 🪄 the 0-token keyword & weight planner (read only)
             import keyword_planner
             return keyword_planner.api(load_cfg(), req)
+        if path == "/api/cancel_job":  # v3.3.2: ⏹ Stop / Unlock
+            return 200, cancel_job(jobs, bool(req.get("force")))
         if path == "/api/verify_venue":  # v3.3.0: Step 1 → 📚 Watched Venues (Crossref + OpenAlex, read only)
             import venues as venue_rules
             cfg = load_cfg()
@@ -1320,12 +1438,19 @@ def api_post(path, req, jobs):
                         req[k] = None
                     elif isinstance(y, bool) or not isinstance(y, int) or not (lo <= y <= hi):
                         return 400, {"ok": False, "error": f"{k}: a year ({lo}–{hi})"}
-            if action == "retire_pillar":  # v3.0.8: an existing, non-fixed pillar, and nothing else unsaved with it
+            if action in ("retire_pillar", "delete_pillar"):  # an existing pillar (any, v3.3.1), not the last one
                 import catalog
                 load_cfg()
                 n = req.get("pillar")
-                if not isinstance(n, int) or isinstance(n, bool) or n not in catalog.PILLARS or n <= fixed_pillars() or not n:
-                    return 400, {"ok": False, "error": "retire_pillar: not a pillar that can be retired"}
+                if not isinstance(n, int) or isinstance(n, bool) or n not in catalog.PILLARS or not n:
+                    return 400, {"ok": False, "error": f"{action}: no pillar {n}"}
+                if len([k for k in catalog.PILLARS if k]) <= 1:
+                    return 400, {"ok": False, "error": f"{action}: pillar {n} is the only pillar; add another first"}
+                req.pop("config", None)  # nothing else unsaved with it: the pillars after it are renumbered
+            if action in ("unretire_pillar", "drop_antique_pillar"):  # v3.3.1: a key from meta['retired_pillars']
+                key = req.get("key")
+                if not isinstance(key, str) or key not in {a["key"] for a in _topic_status(load_cfg())["antique_pillars"]}:
+                    return 400, {"ok": False, "error": f"{action}: no retired pillar {str(key)[:60]!r}"}
                 req.pop("config", None)
             if action in ("drop_topic", "retire_topic", "unretire_topic") and not SLUG_RX.match(str(req.get("slug") or "")):
                 return 400, {"ok": False, "error": "unknown topic dive"}
@@ -1348,7 +1473,7 @@ def api_post(path, req, jobs):
                     return 400, {"ok": False, "error": "add_pillar: anchors must be up to 10 DOIs"}
             job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug",
                                                               "min_year", "split_year",
-                                                              "pillar", "anchors")})
+                                                              "pillar", "anchors", "key")})
             return 200, {"ok": True, "changed": changed, "job": job}
     except ValueError as e:
         return 400, {"ok": False, "error": str(e)}
@@ -1750,7 +1875,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.0</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.2</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1788,6 +1913,12 @@ stored here: only whether they are set.</p>
 
 
 CSS = r"""
+.topictab tr.retired td:first-child b{color:var(--muted)}.topictab tr.retired{background:var(--chip)}
+.offbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px dashed var(--warn);border-radius:10px;padding:6px 10px;margin:8px 0;font-size:13.5px}
+.planrow .pact{display:flex;gap:4px;flex-wrap:wrap;align-items:center}.planrow .pmeta{font-size:12.5px;color:var(--muted);white-space:nowrap}
+.antlist{border:1px solid var(--line);border-radius:10px;padding:6px 10px;margin:10px 0;background:var(--chip)}
+.antlist .arow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--line)}.antlist .arow:first-of-type{border-top:0}
+.sbadge.boost{color:var(--ok);border-color:var(--ok)}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin:10px 0}
 .vcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-width:0}
 .vcard.flag{border-color:var(--cite);box-shadow:inset 3px 0 0 var(--cite)}.vtop{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
@@ -2136,9 +2267,14 @@ function renderAdvanced() {
     h('div', {class: 'kv'}, h('b', {}, 'IEEE API'), h('span', {}, env.has_ieee_key ? '🟢 IEEE_API_KEY is set' : '⚪ not set (optional): set the IEEE_API_KEY environment variable; README → “Free IEEE API key”'),
       h('b', {}, 'Claude AI'), h('span', {}, env.has_claude ? `🟢 Ready (${env.claude_command})` : '⚪ not found: 0-token mode (scores, dashboard, seeding and topic tables all work)'),
       h('b', {}, 'Taste model'), h('span', {}, tasteText())),
+    env.has_ieee_key ? null : h('details', {class: 'how'}, h('summary', {}, '💡 How to set IEEE_API_KEY (optional)'), h('div', {class: 'small'},
+      h('p', {}, 'A free key from developer.ieee.org adds abstracts and IEEE citation counts for the newest papers and back-fills older months. Without it the radar runs on Crossref + OpenAlex.'),
+      h('p', {}, 'Windows (PowerShell), once: ', h('code', {}, 'setx IEEE_API_KEY "<your key>"'), ' · macOS / Linux: add ', h('code', {}, 'export IEEE_API_KEY="<your key>"'), ' to ~/.zshrc or ~/.bashrc.'),
+      h('p', {}, 'Then close and start Start_Radar_GUI (or the radar server) again so it sees the key.' + (STARTER ? '' : ' On the Minisforum radar the key lives in .env next to briefing.py.')))),
     h('p', {class: 'muted small'}, 'Keys are never shown or stored on this page: only whether they are set.'));
 }
 let AUTO = true;  // smart auto-collapse until the user opens or closes a step, or the live data has arrived
+function boosters() { const e = ST.env || {}; return (e.has_ieee_key ? 1 : 0) + (e.has_claude ? 1 : 0) + (tasteOn() ? 1 : 0); }  // v3.3.1
 function stepInfo() {
   const env = ST.env, dr = ST.data_repo, p = ST.pillars, T = ST.topics || {dives: []}, rr = (dr.read_repos || []).length;
   const pr = (D.presets || []).find(x => x.key === S.domain_preset);
@@ -2147,15 +2283,19 @@ function stepInfo() {
     {id: 's2', req: false, done: !!dr.connected || rr > 0, sum: dr.connected ? `🟢 ${repoName(dr.remote_url) || 'data repo'} · ${dr.peers.length} peer(s)` + (rr ? ` · ${rr} shared repo(s) to read` : '')
       : (rr ? `📚 ${rr} shared repo(s) to read · no primary repo` : '⚪ Not connected: solo use works fine')},
     {id: 's3', req: true, done: !!p.ready, sum: p.ready ? `${p.count} pillars · ${fmt(p.keywords)} weighted keywords · ${S.anchors.length} anchors · ${S.vip_authors.length} VIP authors` : 'name your pillars and plan their keywords'},
-    {id: 's4', req: false, opt: true, done: false, sum: `🔎 ${T.dives.length} topic dive(s) · 📚 ${(S.venues || []).length} venues · ${S.deployment === 'mesh_lan' ? '🌐 Mesh LAN' : '💻 Single PC'}`}];
+    {id: 's4', req: false, opt: true, done: boosters() === 3, boost: boosters(),
+     sum: `🔑 ${boosters()}/3 boosters · ${S.deployment === 'mesh_lan' ? '🌐 Virtual Mesh LAN Hub' : '💻 Single PC'} · 🔎 ${T.dives.filter(t => !t.retired).length} dive(s)` +
+          (T.dives.some(t => t.retired) ? ` (+${T.dives.filter(t => t.retired).length} 🏺)` : '') + ` · 📚 ${(S.venues || []).length} venues`}];
 }
 function renderSteps() {
-  const fresh = !(ST.store.papers > 0) && !ST.pillars.ready;
-  for (const x of stepInfo()) {
+  const fresh = !(ST.store.papers > 0) && !ST.pillars.ready, info = stepInfo();
+  const core = info.filter(x => x.req).every(x => x.done);  // Steps 1 and 3 done: Step 4 reads as ready, not unfinished
+  for (const x of info) {
     const el = $('#' + x.id), b = $('#' + x.id + 'b'); if (!el) continue;
     el.classList.toggle('done', x.done);
-    b.className = 'sbadge' + (x.done ? ' ok' : (x.req ? ' need' : ''));
-    b.textContent = x.done ? '✅ Complete' : (x.req ? '⚠️ Needs setup' : (x.opt ? '⚪ Optional' : '⚪ Not set up'));
+    b.className = 'sbadge' + (x.done ? ' ok' : (x.req ? ' need' : (x.opt && core ? ' boost' : '')));
+    b.textContent = x.opt ? (x.boost === 3 ? '✅ 3/3 Boosters Active' : x.boost ? `🟢 ${x.boost}/3 Boosters Active` : core ? '🟢 Ready · 0-Token Mode' : '⚪ Optional')
+      : x.done ? '✅ Complete' : (x.req ? '⚠️ Needs setup' : '⚪ Not set up');
     $('#' + x.id + 's').textContent = x.sum;
     if (AUTO) el.open = x.opt ? false : (fresh ? true : (x.req && !x.done));
   }
@@ -2195,19 +2335,40 @@ function runBtn(a, extra, primary, label, cls) {
   return h('button', {class: 'btn' + (primary ? ' primary' : '') + (cls ? ' ' + cls : ''), title: RUN_TIPS[a], 'data-run': a,
     onclick: () => run(a, extra)}, label || D.actions[a]);
 }
-function lockRun() { document.querySelectorAll('[data-run]').forEach(b => { b.disabled = !!(API && (JOB.running || ACT)); }); }
+function lockRun() {  // v3.3.1: a disabled run button says why
+  const busy = !!(API && (JOB.running || ACT));
+  document.querySelectorAll('[data-run]').forEach(b => {
+    if (b.dataset.tip == null) b.dataset.tip = b.title || '';
+    b.disabled = busy;
+    b.title = busy ? `Disabled while “${ACT ? ACT.what || 'another radar run' : (D.actions[JOB.action] || 'a run')}” is running: it unlocks when that finishes (or ⏹ Stop / Unlock in the console)` : b.dataset.tip;
+  });
+  const sb = document.getElementById('stopbtn'); if (sb) sb.hidden = !busy;
+}
+function offBar() {  // v3.3.1: why server actions show commands instead of running, and a way back
+  if (API) return null;
+  return h('div', {class: 'offbar'}, h('span', {}, '⚪ This page is not connected to the radar server, so ↺ Restore / 🗑 / 🏺 show the terminal command instead of running it.'),
+    h('button', {class: 'btn small', onclick: () => reconnect(), title: 'Try the Control Center / sync server again (127.0.0.1 and your LAN / Tailscale hosts)'}, '🔄 Reconnect'));
+}
 // a run this page didn't start (scheduled task, terminal, another window): stream .run.log until it ends
 function streamActive(a) {
   ACT = {id: a.id, next: 0};
+  ACT.what = a.what;
   showConsole(`⏳ Already running: ${a.what}`, ['Another radar run holds the lock, so nothing new was started. Its output:']);
   lockRun(); pollActive();
 }
 async function pollActive() {
   if (!ACT) return;
   let r;
-  try { r = await call('GET', '/api/active?since=' + ACT.next); } catch (e) { setTimeout(pollActive, 3000); return; }
+  try { r = await call('GET', '/api/active?since=' + ACT.next, null, 15000); } catch (e) { r = null; }
+  if (!ACT) return;
+  if (!r || !r.ok || !Array.isArray(r.lines)) {  // v3.3.2: retried with backoff, then /api/config decides
+    ACT.fails = (ACT.fails || 0) + 1;
+    if (ACT.fails >= 3) { ACT.fails = 0; return recover('the other run'); }
+    return setTimeout(pollActive, 1000 * ACT.fails);
+  }
+  ACT.fails = 0;
   const pre = $('#console');
-  if (r.active && r.id !== ACT.id) { ACT = {id: r.id, next: 0}; if (pre) pre.textContent = ''; return pollActive(); }
+  if (r.active && r.id !== ACT.id) { ACT = {id: r.id, next: 0, what: r.what}; if (pre) pre.textContent = ''; return pollActive(); }
   if (pre && r.lines.length) {
     const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
     pre.textContent += (pre.textContent ? '\n' : '') + r.lines.join('\n');
@@ -2215,14 +2376,14 @@ async function pollActive() {
   }
   ACT.next = r.next;
   if (r.active) return setTimeout(pollActive, 1500);
-  ACT = null; lockRun();
   const t = $('#jobtitle'); if (t) t.textContent = '✅ The other run finished: the buttons work again';
-  refresh(true);
+  setBusy(false);
 }
 function showConsole(title, lines, cmds) {
   const c = $('#c-console'); c.hidden = false;
   const pre = h('pre', {class: 'console', id: 'console'}, (lines || []).join('\n'));
-  fill(c, h('h2', {}, h('span', {id: 'jobtitle'}, title), h('button', {class: 'btn small', onclick: () => { c.hidden = true; }}, 'Hide')),
+  fill(c, h('h2', {}, h('span', {id: 'jobtitle'}, title), h('button', {class: 'btn small', onclick: () => { c.hidden = true; }}, 'Hide'),
+    h('button', {class: 'btn small danger', id: 'stopbtn', hidden: !(API && (JOB.running || ACT)), title: 'End this run now and release the radar lock (v3.3.2)', onclick: () => stopJob()}, '⏹ Stop / Unlock')),
     cmds ? h('div', {}, cmds) : null, cmds ? null : pre);
   c.scrollIntoView({behavior: 'smooth', block: 'nearest'});
 }
@@ -2244,13 +2405,13 @@ function showCommands(a, extra) {
         : 'This page could not reach radar_sync_server.py (PaperRadar_SyncServer). Start it, open this page from the server, or run on the Minisforum:'),
     cmdRow(cd), lines.map(cmdRow)]);
 }
-async function call(method, path, body) {
+async function call(method, path, body, ms) {  // v3.3.2: every request has a time limit (a hung one never stalls a loop)
   const hd = {};
   if (body) hd['Content-Type'] = 'application/json';
   if (API === location.origin) hd['X-Radar-GUI'] = '1';
   if (D.sync && D.sync.token) hd['X-Radar-Token'] = D.sync.token;
   const r = await fetch(API + path, {method, headers: hd, body: body ? JSON.stringify(body) : undefined,
-                                     credentials: 'same-origin', cache: 'no-store'});
+                                     credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(ms || 90000)});
   let j = {}; try { j = await r.json(); } catch (e) { j = {ok: false, error: `HTTP ${r.status}`}; }
   if (!r.ok && j.ok !== false) j.ok = false;
   return j;
@@ -2275,9 +2436,45 @@ async function run(a, extra) {
   showConsole(`⏳ ${D.actions[a]}…`, []);
   lockRun(); poll();
 }
+// v3.3.2: a failed or slow /api/job is retried with backoff; after 5 failures in a row the page asks /api/config
+// whether a run is still going, and unlocks its buttons when none is
+async function recover(what) {
+  let j = null;
+  try { j = await call('GET', '/api/config', null, 15000); } catch (e) { j = null; }
+  if (!j || !j.ok) { showNote(`⚠️ The radar server isn't answering (${what}): trying again…`); return setTimeout(() => recover(what), 10000); }
+  ST = j.status;
+  if (j.job && j.job.running) { JOB = {id: j.job.id, next: JOB.id === j.job.id ? JOB.next : 0, running: true, fails: 0}; lockRun(); return poll(); }
+  if (j.active) { ACT = null; return streamActive(j.active); }
+  const done = j.job && j.job.id === JOB.id && j.job.finished ? j.job : null;
+  setBusy(false);
+  const t = $('#jobtitle');
+  if (t) t.textContent = JOB.stopped ? '⏹ Stopped: the buttons work again' : done ? `${done.rc ? '❌' : '✅'} ${done.label} ${done.rc ? `failed (exit ${done.rc})` : 'finished'} (its output didn't reach this page)` : '✅ No radar run is going on any more: the buttons work again';
+}
+function showNote(msg) { const pre = $('#console'); if (pre && !pre.textContent.endsWith(msg)) pre.textContent += '\n' + msg; }
+function setBusy(on) {  // v3.3.2: the one switch for the page's "a run is going on" state
+  if (!on) { JOB.running = false; ACT = null; }
+  lockRun();
+  if (!on) refresh(true);
+}
+async function stopJob() {  // v3.3.2: ⏹ Stop / Unlock
+  const ext = !!ACT && !JOB.running;
+  if (!confirm(ext ? `⏹ Stop “${ACT.what || 'the other radar run'}”?\n\nThis page didn't start it (a scheduled task, a terminal or another window). Stop it anyway and release the radar lock?`
+                   : `⏹ Stop “${D.actions[JOB.action] || 'this run'}”?\n\nIt ends now; what it already saved stays, nothing half-written is kept. The radar lock is released.`)) return;
+  JOB.stopped = !ext;
+  let r; try { r = await call('POST', '/api/cancel_job', {force: ext}, 40000); } catch (e) { r = {ok: false, error: String(e)}; }
+  if (!r.ok) return alert('Could not stop it: ' + (r.error || 'no answer'));
+  if (r.active) { toast('Still running: ' + r.active.what, 5000); return; }
+  if (!(r.job && r.job.running)) { const t = $('#jobtitle'); if (t) t.textContent = '⏹ Stopped: the buttons work again'; setBusy(false); }
+}
 async function poll() {
   let r;
-  try { r = await call('GET', '/api/job?since=' + JOB.next); } catch (e) { setTimeout(poll, 3000); return; }
+  try { r = await call('GET', '/api/job?since=' + JOB.next, null, 15000); } catch (e) { r = null; }
+  if (!r || !r.ok || !Array.isArray(r.lines)) {
+    JOB.fails = (JOB.fails || 0) + 1;
+    if (JOB.fails >= 3) { JOB.fails = 0; return recover('job status'); }
+    return setTimeout(poll, 1000 * JOB.fails);
+  }
+  JOB.fails = 0;
   if (r.id !== JOB.id) { JOB.id = r.id; JOB.next = 0; return poll(); }
   const pre = $('#console');
   if (pre && r.lines.length) {
@@ -2287,9 +2484,9 @@ async function poll() {
   }
   JOB.next = r.next; JOB.running = r.running; JOB.rc = r.rc; JOB.action = r.action; lockRun();
   if (r.running) return setTimeout(poll, 1000);
-  const t = $('#jobtitle'); if (t) t.textContent = (r.rc ? '❌ ' : '✅ ') + (r.label || '') + (r.rc ? ` failed (exit ${r.rc})` : ' finished');
+  const t = $('#jobtitle'); if (t) t.textContent = JOB.stopped ? '⏹ Stopped: the buttons work again' : (r.rc ? '❌ ' : '✅ ') + (r.label || '') + (r.rc ? ` failed (exit ${r.rc})` : ' finished');
   if (r.action === 'self_update' && !r.rc) { toast('⬆️ Updated: reloading…', 3000); return setTimeout(() => location.reload(), 1500); }
-  refresh(true);
+  setBusy(false);
   if (['pull_data_repo', 'sync_data_repo', 'clone_data_repo', 'init_data_repo'].includes(r.action)) checkUpdates(false);
 }
 async function refresh(quiet) {
@@ -2297,8 +2494,9 @@ async function refresh(quiet) {
   const j = await call('GET', '/api/config');
   if (!j.ok) return quiet ? null : toast(j.error || 'Could not reload');
   ST = j.status;
-  if (!isDirty()) { S = j.editable; buildKW(); }
-  renderAll(); if (!isDirty()) { baseline = snapshot(); changed(); }
+  const clean = !isDirty();  // v3.3.1: decided once, before S is replaced (a retire / restore changes config.json)
+  if (clean) { S = j.editable; buildKW(); }
+  renderAll(); if (clean) { baseline = snapshot(); changed(); }
 }
 
 // ---------- 2. themes & keywords ----------
@@ -2327,11 +2525,7 @@ function renderThemes() {
          h('input', {class: 'in short', value: p.short, maxlength: 24, placeholder: 'short label', title: '1–2 words for phones and the Pillar column (optional)', oninput: e => { p.short = e.target.value; changed(); }}),
          h('button', {class: 'btn small', title: 'Move up', disabled: i === FIX, onclick: () => { KW.pillars.splice(i - 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↑'),
          h('button', {class: 'btn small', title: 'Move down', disabled: i === KW.pillars.length - 1, onclick: () => { KW.pillars.splice(i + 1, 0, ...KW.pillars.splice(i, 1)); renderThemes(); changed(); }}, '↓'),
-         savedPillar(i) ? h('button', {class: 'btn small', 'data-run': 'retire_pillar', title: '🏺 Retire as Antique: its papers keep a 🏺 badge, marks, notes and digests; its keywords leave config.json (saved in _system/retired_pillars_config.json); pillars after it move up one number',
-                                       onclick: () => retirePillar(i)}, '🏺 Retire')
-           : h('button', {class: 'btn small danger', title: 'Remove this new (unsaved) pillar', onclick: () => {
-           if (!confirm(`Remove the new pillar ${i + 1} “${p.name}” and its ${p.kws.length} keywords?`)) return;
-           KW.pillars.splice(i, 1); renderThemes(); changed(); }}, '✕')]
+         pillarActs(i)]
       : [h('span', {class: 'num'}, `P${i + 1}`), h('b', {class: 'name'}, p.name.replace(/^Pillar\s*\d+\s*[—–-]\s*/, '')), p.short ? h('span', {class: 'tag'}, p.short) : null];
     return h('div', {class: 'pillar'}, h('div', {class: 'ph'}, head, h('span', {class: 'muted small', 'data-pcount': i + 1})), chips(p.kws, kwOpts(p.kws)));
   });
@@ -2344,14 +2538,14 @@ function renderThemes() {
     h('p', {class: 'muted small'}, 'Click a weight to change it; ⇄ moves a keyword to another pillar.'),
     howBox('A paper\'s score is the sum of the weights of the keywords in its title, abstract and index terms (word match, case-insensitive unless ALL CAPS; a space or hyphen matches either; plurals match). The pillar with the most hits files it. Weights: 5 = defining term, 3–4 = strong, 1–2 = generic. ',
       h('span', {class: 'tip', title: 're:<label>::<regex> is a raw (Python) regular expression, case-sensitive unless it starts with (?i). The label is what the report shows.'}, 'Regex keywords?')),
-    FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar (catalog.py; their cached digests name them); their keywords are editable. Add new pillars after them.`) : null,
+    FIX ? h('p', {class: 'muted small'}, `Pillars 1–${FIX} are fixed on this radar.`) : null,
     h('div', {class: 'row'}, h('button', {class: 'btn primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
       h('span', {class: 'muted small'}, 'name, anchors and seed words → 🪄 planned keywords for the new pillar only → its first 10 candidates')),
-    ps, loose, orph, antiquePillars(),
+    ps, loose, orph,
     true ? h('div', {class: 'row'}, h('button', {class: 'btn', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
       KW.pillars.push({name: '', short: '', marker: null, kws: []}); renderThemes(); changed();
       const ins = document.querySelectorAll('.pillar .name'); if (ins.length) ins[ins.length - 1].focus(); }}, '＋ Add pillar'),
-      h('span', {class: 'muted small'}, `Up to ${D.max_pillars}. Reordering renumbers the pillars; papers you pinned to a pillar number keep that number.`)) : null,
+      h('span', {class: 'muted small'}, `Up to ${D.max_pillars}. Saving a new order renumbers the pillars; their papers (pinned or filed by a cached digest) move with them.`)) : null,
     h('div', {class: 'grid2'},
       h('div', {}, h('h3', {}, '🚫 Negative keywords ', h('span', {class: 'tip muted small', title: 'Off-topic terms. A negative keyword zeroes a paper with no positive keyword hit; with a hit (or a title matching the override) it only costs negative_penalty.'}, 'ⓘ')),
         chips(S.negative_keywords, {placeholder: 'e.g. phased array'})),
@@ -2432,6 +2626,7 @@ function promoteDive(t) {
 function savedPillar(i) { return i < S.pillars.length && (KW.pillars[i].name || '').trim() === (S.pillars[i] || '').trim(); }
 function retirePillar(i) {
   const p = KW.pillars[i], n = i + 1;
+  if (KW.pillars.length <= 1) return alert('This is the only pillar: add another before retiring it.');
   if (isDirty()) return alert('Save (💾) or reload your other changes first: retiring renumbers the pillars after this one.');
   if (!API) return showConsole('Run this in a terminal', null, [cmdRow(`${pyCmd()} briefing.py --retire-pillar ${n}`)]);
   if (!confirm(`🏺 Retire pillar ${n} “${p.name}” as an antique?\n\n• Its papers keep a 🏺 badge with their marks, ⭐, notes and digests (dashboard → 📅 Weekly Brief → 🏺 Antiques).\n` +
@@ -2439,11 +2634,51 @@ function retirePillar(i) {
                `• Pillars after it move up one number. A new pillar ${n} later never mixes with these papers.`)) return;
   run('retire_pillar', {pillar: n});
 }
-function antiquePillars() {
+function deletePillar(i) {  // v3.3.1: 🗑 Delete (no 🏺 antique); an unsaved draft row just goes
+  const p = KW.pillars[i], n = i + 1;
+  if (!savedPillar(i)) {
+    if (!confirm(`Remove the new (unsaved) pillar ${n} “${p.name || 'unnamed'}” and its ${p.kws.length} keywords?`)) return;
+    KW.pillars.splice(i, 1); renderThemes(); changed(); return;
+  }
+  if (KW.pillars.length <= 1) return alert('This is the only pillar: add another before deleting it.');
+  if (isDirty()) return alert('Save (💾) or reload your other changes first: deleting renumbers the pillars after this one.');
+  if (!API) return showConsole('Run this in a terminal', null, [cmdRow(`${pyCmd()} briefing.py --delete-pillar ${n}`)]);
+  if (!confirm(`🗑 Delete pillar ${n} “${p.name}”?\n\nUnlike 🏺 Retire, no 🏺 Antiques collection is kept:\n` +
+               `• its ${p.kws.length} keywords leave config.json (a copy goes to _system/deleted_pillars_config.json);\n` +
+               `• its unreviewed candidates go back to the corpus;\n• papers you ✅ selected, ⭐ cited, 🏷️ noted or 📌 pinned stay in the store, Selected and Cite views (without a pillar);\n` +
+               `• pillars after it move up one number.\n\nOK = delete · Cancel = keep it (🏺 Retire keeps everything as an antique)`)) return;
+  run('delete_pillar', {pillar: n});
+}
+function restorePillar(a) {  // v3.3.1: ↺ Restore a 🏺 antique pillar
+  if (isDirty()) return alert('Save (💾) or reload your other changes first.');
+  if (!API) return showConsole('Run this in a terminal', null, [cmdRow(`${pyCmd()} briefing.py --unretire-pillar "${a.key}" --rescore --seed-pillars 5 --no-claude`)]);
+  if (KW.pillars.length >= D.max_pillars) return alert(`Already ${KW.pillars.length} pillars (the most): retire or delete one first.`);
+  if (!confirm(`↺ Restore “${a.name}” (🏺 ${a.key}) as pillar ${KW.pillars.length + 1}?\n\nIts label and saved keywords go back into config.json, its ${a.papers} papers lose the 🏺 stamp and are filed under it, then the radar re-scores and refills its candidates (0 tokens).`)) return;
+  run('unretire_pillar', {key: a.key});
+}
+function dropAntique(a) {  // v3.3.1: 🗑 Drop Antique Tag
+  if (!API) return showConsole('Run this in a terminal', null, [cmdRow(`${pyCmd()} briefing.py --drop-antique-pillar "${a.key}"`)]);
+  if (!confirm(`🗑 Drop the 🏺 tag “${a.key}” (${a.name})?\n\nIts ${a.papers} papers keep their marks, ⭐, notes and digests but lose the 🏺 badge and leave 🏺 Antiques; ↺ Restore is no longer possible (its keywords stay in _system/retired_pillars_config.json).`)) return;
+  run('drop_antique_pillar', {key: a.key});
+}
+function antiquePillars() {  // v3.3.1: 🏺 Retired / Antique Pillars with ↺ Restore and 🗑 Drop Antique Tag
   const A = (ST.topics || {}).antique_pillars || [];
-  return A.length ? h('div', {class: 'pillar muted'}, h('div', {class: 'ph'}, h('b', {}, `🏺 Antique pillars (${A.length})`),
-      h('span', {class: 'muted small'}, 'retired: their papers keep a 🏺 badge; browse them in the dashboard\'s 📅 Weekly Brief → 🏺 Antiques')),
-    h('div', {class: 'chips'}, A.map(a => h('span', {class: 'chip', title: `${a.name} · was P${a.id} · retired ${a.retired_at}`}, `🏺 ${a.key} · ${a.papers} papers`)))) : null;
+  if (!A.length) return null;
+  return h('div', {class: 'antlist'}, h('div', {class: 'ph'}, h('b', {}, `🏺 Retired / Antique Pillars (${A.length})`),
+      h('span', {class: 'muted small'}, ' their papers keep a 🏺 badge (dashboard → 📅 Weekly Brief → 🏺 Antiques)')),
+    offBar(),
+    A.map(a => h('div', {class: 'arow'}, h('b', {}, `🏺 ${a.key}`), h('span', {class: 'small'}, a.name),
+      h('span', {class: 'muted small'}, `· was P${a.id} · ${a.papers} papers · retired ${a.retired_at}`),
+      h('button', {class: 'btn small primary', 'data-run': 'unretire_pillar', title: 'Bring it back as the last pillar with its keywords and papers', onclick: () => restorePillar(a)}, '↺ Restore'),
+      h('button', {class: 'btn small danger', 'data-run': 'drop_antique_pillar', title: 'Forget the 🏺 tag (papers keep their marks and notes)', onclick: () => dropAntique(a)}, '🗑 Drop Antique Tag'))));
+}
+function pillarActs(i) {  // v3.3.1: 🏺 Retire / 🗑 Delete on every pillar (P1–P4 included)
+  const saved = savedPillar(i);
+  return h('span', {class: 'pact'},
+    saved ? h('button', {class: 'btn small', 'data-run': 'retire_pillar', title: '🏺 Retire as Antique: its papers keep a 🏺 badge, marks, notes and digests; its keywords leave config.json (saved in _system/retired_pillars_config.json, ↺ Restore brings them back); pillars after it move up one number',
+                         onclick: () => retirePillar(i)}, '🏺 Retire') : null,
+    h('button', {class: 'btn small danger', 'data-run': saved ? 'delete_pillar' : null, title: saved ? '🗑 Delete: no 🏺 antique; unreviewed candidates go back to the corpus, ✅ / ⭐ / 🏷️ / 📌 papers stay' : 'Remove this new (unsaved) pillar',
+                       onclick: () => deletePillar(i)}, saved ? '🗑 Delete' : '🗑'));
 }
 
 // ---------- ＋ Add New Pillar (Guided), v3.0.7: one new pillar P<N+1>; P1..P<N> stay byte-for-byte as they are ----------
@@ -2577,16 +2812,16 @@ function renderTopic() {
       href ? h('a', {class: 'btn small primary', href, target: '_blank'}, TLAST.a === 'topic_dive' ? '📄 Open Topic Report' : '📄 Open Recall Results') : h('span', {class: 'muted small'}, '(no report page yet: see the console)'),
       TLAST.a === 'topic_dive' ? h('a', {class: 'btn small', href: 'DASHBOARD.html#topics', target: '_blank'}, '📊 DASHBOARD → 🔎 Topic Dives') : null);
   }
-  const order = T.dives.filter(t => !t.retired).concat(T.dives.filter(t => t.retired));
-  const dives = T.dives.length ? h('table', {class: 'mini topictab'}, h('tbody', {}, order.map(t => h('tr', {class: t.retired ? 'muted' : ''},
+  const order = T.dives.filter(t => !t.retired).concat(T.dives.filter(t => t.retired)), offline = T.dives.length ? offBar() : null;
+  const dives = T.dives.length ? h('table', {class: 'mini topictab'}, h('tbody', {}, order.map(t => h('tr', {class: t.retired ? 'retired' : ''},
     h('td', {}, h('b', {}, (t.retired ? '🏺 ' : '🔎 ') + t.query), t.retired ? h('span', {class: 'tag'}, '🏺 Antique') : null, h('div', {class: 'muted small'}, t.date)),
     h('td', {class: 'small nowrap', title: `${t.n_classic} foundational classics + ${t.n_recent} recent SOTA papers`}, `${t.n_classic}🏛️ + ${t.n_recent}🚀`),
     h('td', {class: 'nowrap'}, t.href ? h('a', {class: 'btn small', href: t.href, target: '_blank'}, '📄 Report') : h('span', {class: 'muted small'}, 'no report'),
       h('button', {class: 'btn small', title: 'Open ＋ Add New Pillar, pre-filled with this dive\'s title, words and 🏛️ classic DOIs (as anchors)',
                    disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => promoteDive(t)}, '📌 Promote Dive to Weekly Pillar'),
-      t.retired ? h('button', {class: 'btn small', 'data-run': 'unretire_topic', title: 'Bring this dive back to 🔎 Topic Dives', onclick: () => retireTopic(t, true)}, '↺ Restore')
+      t.retired ? h('button', {class: 'btn small primary', 'data-run': 'unretire_topic', title: API ? 'Bring this dive back to 🔎 Topic Dives' : `Not connected to the radar server: shows the command (briefing.py --unretire-topic ${t.slug})`, onclick: () => retireTopic(t, true)}, '↺ Restore')
                 : h('button', {class: 'btn small', 'data-run': 'retire_topic', title: '🏺 Retire as Antique: the dive moves to Past / Antique Dives on the dashboard; its papers keep their badge, marks, notes and reports', onclick: () => retireTopic(t)}, '🏺 Retire'),
-      h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Delete permanently (the papers lose this dive\'s badge; marks, notes and report files stay)', onclick: () => dropTopic(t)}, '🗑'))))))
+      h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Delete permanently (the papers lose this dive\'s badge; marks, notes and report files stay)' + (API ? '' : ` · not connected: shows the command (briefing.py --drop-topic ${t.slug})`), onclick: () => dropTopic(t)}, '🗑'))))))
     : h('p', {class: 'muted small'}, 'No topic dives yet.');
   fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
     h('div', {class: 'row'}, inp), years,
@@ -2600,7 +2835,7 @@ function renderTopic() {
       '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ` (and PubMed for BioMed), picks ${tp.n_classic} 🏛️ classics + ${tp.n_recent} 🚀 recent papers, ` +
       'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
     result,
-    h('h3', {}, `Existing Topic Dives (${T.dives.length})`), dives,
+    h('h3', {}, `Existing Topic Dives (${T.dives.length})`), offline, dives,
     T.recalls.length ? h('p', {class: 'small'}, 'Recent recalls: ', T.recalls.map(r => h('a', {href: r.href, target: '_blank', class: 'tag'}, r.name.replace(/^\d{4}-\d\d-\d\d_recall_/, '')))) : null);
   lockRun();
 }
@@ -2621,12 +2856,15 @@ function renderPlan() {
   const legend = h('table', {class: 'mini legend'}, h('tbody', {}, LEGEND.map(([w, t, note, ex]) => h('tr', {},
     h('td', {}, h('span', {class: 'wpill w' + w}, '+' + w)), h('td', {}, h('b', {}, t), h('div', {class: 'muted small'}, note)),
     h('td', {class: 'small muted'}, ex)))));
+  const PP = (ST.pillars && ST.pillars.papers) || {};
   const pillars = KW.pillars.map((p, i) => h('div', {class: 'row planrow'}, h('span', {class: 'num'}, `P${i + 1}`),
-    i >= (D.fixed_pillars || 0) ? ta({class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
-                          oninput: e => { const s0 = seedsOf(p, i); p.name = e.target.value; setSeeds(p, i, s0); changed(); }, onchange: () => renderThemes()}, {single: ' '})
-            : h('b', {class: 'pname'}, p.name.replace(/^Pillar\s*\d+\s*[—–-]\s*/, '')),
+    ta({class: 'in pname', value: p.name, placeholder: 'Pillar name, e.g. Pipelined & Ring-Amp ADCs',
+        oninput: e => { const s0 = seedsOf(p, i); p.name = e.target.value; setSeeds(p, i, s0); changed(); }, onchange: () => renderThemes()}, {single: ' '}),
+    p.short ? h('span', {class: 'tag', title: 'short label (edit it in 🎛️ Fine-tune)'}, p.short) : null,
+    h('span', {class: 'pmeta'}, `${p.kws.length} kw` + (savedPillar(i) ? ` · ${PP[i + 1] || 0} papers` : ' · not saved yet')),
     ta({class: 'in seeds', value: seedsOf(p, i), placeholder: 'rough seed words, comma-separated or one per line: ring amplifier, pipelined ADC, low power',
-                oninput: e => setSeeds(p, i, e.target.value)})));
+                oninput: e => setSeeds(p, i, e.target.value)}),
+    pillarActs(i)));
   const doiIn = ta({class: 'in mono', placeholder: '10.1109/JSSC.2020.1234567 or a doi.org link: one per line or comma-separated for several'}, {enter: () => addDoi()});
   const addDoi = () => {
     const ds = doiIn.value.split(/[\s,;]+/).map(cleanDoi).filter(Boolean); if (!ds.length) return;
@@ -2643,7 +2881,8 @@ function renderPlan() {
     h('details', {class: 'how legendbox'}, h('summary', {}, `💡 How keyword weights work (min_score = ${ms})`), legend,
       h('p', {class: 'muted small'}, `A paper becomes a candidate when the weights of the keywords in its title, abstract and index terms add up to ${ms}: one +5 is enough, +1 words only help in combination. ALL-CAPS keywords match case; a space or hyphen matches either; plurals match.`)),
     h('h3', {}, '① Name your pillars, add 2–5 anchor DOIs and a few rough seed words'),
-    pillars,
+    h('p', {class: 'muted small'}, 'Every pillar can be renamed, 🏺 retired (kept as an antique, ↺ restorable) or 🗑 deleted. Retiring or deleting renumbers the pillars after it; papers filed by a cached digest stay with their pillar (no re-digest).'),
+    pillars, antiquePillars(),
     h('div', {class: 'row'}, h('button', {class: 'btn small', disabled: KW.pillars.length >= D.max_pillars, onclick: () => {
       KW.pillars.push({name: '', short: '', marker: null, kws: []}); changed(); renderThemes(); }}, '＋ Add pillar'),
       h('button', {class: 'btn small primary', disabled: KW.pillars.length >= D.max_pillars, onclick: () => addPillarWizard()}, '＋ Add New Pillar (Guided)'),
@@ -3266,16 +3505,24 @@ async function tryBase(base) {
   try {
     const hd = {}; if (base === location.origin) hd['X-Radar-GUI'] = '1';
     if (D.sync && D.sync.token) hd['X-Radar-Token'] = D.sync.token;
-    const r = await fetch(base + '/api/config', {headers: hd, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(3000)});
+    // v3.3.1: this computer answers at once; a LAN / Tailscale host gets more time (a sleepy Wi-Fi or a relayed tailnet)
+    const local = base === location.origin || /\/\/(127\.0\.0\.1|localhost)(:|$)/.test(base);
+    const r = await fetch(base + '/api/config', {headers: hd, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(local ? 3000 : 6000)});
     if (!r.ok) return null; const j = await r.json(); return j.ok ? j : null;
   } catch (e) { return null; }
 }
-async function connect() {
+async function reconnect() {
+  const m = $('#mode'); m.textContent = '⏳ Connecting…'; m.onclick = null;
+  await connect(true);
+  if (!API) toast('Still not reachable: is the radar server running on that computer (and the same network / Tailscale)?', 6000);
+}
+async function connect(again) {
   const bases = [];
   if (/^https?:$/.test(location.protocol)) bases.push(location.origin);
   for (const host of (D.sync && D.sync.hosts) || []) bases.push(`http://${host}:${D.sync.port}`);
-  for (const b of [...new Set(bases)]) {
-    const j = await tryBase(b);
+  const uniq = [...new Set(bases)], got = await Promise.all(uniq.map(tryBase));  // v3.3.1: all at once
+  for (const [i, b] of uniq.entries()) {
+    const j = got[i];
     if (j) {
       API = b; ST = j.status; S = j.editable; buildKW(); renderAll(); AUTO = false; baseline = snapshot(); changed();
       const m = $('#mode'); m.textContent = '🟢 Live'; m.title = 'Connected to ' + b + ': buttons run on the radar computer';
@@ -3286,7 +3533,11 @@ async function connect() {
     }
   }
   AUTO = false;
-  const m = $('#mode'); m.textContent = '⚪ Static'; m.title = 'Opened as a file: edits are saved as a downloaded config.json; the run buttons show the commands';
+  const m = $('#mode'); m.textContent = '⚪ Static · 🔄 Reconnect';
+  m.title = (location.protocol === 'file:' ? 'Opened as a file' : 'The radar server did not answer') +
+    ': edits are saved as a downloaded config.json and the run buttons (↺ Restore, 🗑, 🏺 …) show their terminal command. Click to try the server again.';
+  m.onclick = () => reconnect();
+  if (again) renderAll();
   if (location.protocol === 'file:' && STARTER) {
     try {
       const r = await fetch(`http://127.0.0.1:${D.gui_port}/ping`, {signal: AbortSignal.timeout(1200)});

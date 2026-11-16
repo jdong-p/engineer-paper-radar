@@ -26,6 +26,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
 from env_guard import ensure_minisforum_env
@@ -620,7 +621,13 @@ def rescore_all(cfg, store, log=print):
     week, _ = week_of(date.today())
     bvs = {bv["short"]: bv for bv in cfg["beyond_ieee_venues"]}
     changed = unskipped = 0
-    for p in store.where("1=1"):
+    papers = store.where("1=1")
+    n_all, t0 = len(papers), time.time()
+    log(f"Re-scoring {n_all:,} papers…")
+    for i, p in enumerate(papers, 1):
+        if i % 2500 == 0:
+            store.db.commit()  # v3.3.2: batched writes; the lock is held for milliseconds, not the whole run
+            log(f"  Rescored {i:,} / {n_all:,}… ({time.time() - t0:.1f} s)")
         if p.get("grp") == "beyond":
             bv = bvs.get(p["venue"])
             if not bv:
@@ -637,8 +644,10 @@ def rescore_all(cfg, store, log=print):
             upd.update(status="candidate", week=week, related=find_related(p, store))
             unskipped += 1
         if upd:
-            store.update(p["doi"], upd)
-    log(f"Re-score: {changed} scores changed, {unskipped} skipped papers back as candidates")
+            store.update(p["doi"], upd, commit=False)  # only rows whose score / hits / status changed
+    store.db.commit()
+    log(f"Re-score: {changed} scores changed, {unskipped} skipped papers back as candidates "
+        f"({n_all:,} papers in {time.time() - t0:.1f} s)")
     return {"changed": changed, "unskipped": unskipped}
 
 
@@ -689,6 +698,7 @@ def _fold(s):
     return re.sub(r"[.\s]+", " ", "".join(c for c in s if not unicodedata.combining(c))).strip().lower()
 
 
+@lru_cache(maxsize=65536)  # v3.3.2: the same authors and VIPs come back for every paper of a --rescore
 def _name_key(name):
     """('kofi', 'makinwa') from 'Kofi A. A. Makinwa'; ('d', 'blaauw') from 'D. Blaauw'; (None, 'makinwa') from 'Makinwa'."""
     parts = _fold(name).split(" ")
@@ -734,18 +744,113 @@ def _kw_norm(kw):
     return re.sub(r"[\s-]+", " ", kw.lower())
 
 
-def score(p, cfg, anchor_refs=frozenset()):
-    own = f"{p['title']} {p['title']} {p.get('abstract') or ''}"
-    text = f"{own} {' '.join(p.get('index_terms') or [])}"
-    total, hits, seen, title_w = 0, [], set(), 0
-    for kw, w in cfg["positive_keywords"].items():
+_PLAN = {"key": None, "plan": None}
+
+
+def _required(rx):
+    """The literal pieces a regex keyword can't match without: [(alternative, …)], one of each tuple must occur (in
+    the casefolded text when the pattern ignores case). From Python's own parse of the pattern; [] when nothing is
+    certain (then the regex simply always runs). E.g. 'sub-?(nW|nanowatt)' → [('sub',), ('nw', 'nanowatt')]."""
+    try:
+        try:
+            from re import _parser as sp  # Python 3.11+
+        except ImportError:
+            import sre_parse as sp  # Python 3.8–3.10
+        fold = bool(rx.flags & re.I)
+
+        def walk(data):
+            reqs, run = [], []
+
+            def flush():
+                t = "".join(run)
+                if len(t) >= 2 or (t and not t.isascii()):
+                    reqs.append(((t.casefold() if fold else t),))
+                run.clear()
+            for op, av in data:
+                if op == sp.LITERAL:
+                    run.append(chr(av))
+                    continue
+                flush()
+                if op == sp.SUBPATTERN and not av[1] and not av[2]:  # a plain group, no scoped flags
+                    reqs += walk(av[-1].data)
+                elif op == sp.BRANCH:
+                    alts = []
+                    for b in av[1]:
+                        r = walk(b.data)
+                        if not r:
+                            alts = None
+                            break
+                        alts += list(r[0])
+                    if alts:
+                        reqs.append(tuple(alts))
+            flush()
+            return reqs
+        return walk(sp.parse(rx.pattern, rx.flags).data)
+    except Exception:
+        return []
+
+
+def _kw_plan(cfg):
+    """v3.3.2: score()'s matchers, built once per keyword set instead of once per paper (a --rescore scores ~10,000
+    papers): [(weight, hit label, words that must all occur, case-sensitive, compiled _kw_hit pattern, anchored)] in
+    config order ("low-noise" / "low noise" once, weight 0 left out), and the negative keywords. A keyword's words
+    are looked up as plain substrings first (casefolded unless the keyword is ALL CAPS): most keywords aren't in
+    most papers. Where its first word occurs, the pattern (which starts with that word) is matched right there
+    instead of searched through the whole text. The result is exactly _kw_hit's (checked on every stored paper)."""
+    pk, neg = cfg["positive_keywords"], tuple(cfg.get("negative_keywords") or [])
+    key = (tuple(pk.items()), neg)
+    if _PLAN["key"] == key:
+        return _PLAN["plan"]
+    items, seen = [], set()
+    for kw, w in pk.items():
         if kw.startswith("re:") or _kw_norm(kw) not in seen:
             seen.add(_kw_norm(kw))
         else:
-            continue  # "low-noise" / "low noise" count once
-        if w and _kw_hit(kw, text):
-            total, hits = total + w, hits + [kw[3:].split("::", 1)[0] if kw.startswith("re:") else kw]
-            if w > 0 and _kw_hit(kw, p["title"] or ""):
+            continue
+        if not w:
+            continue
+        if kw.startswith("re:"):
+            rx = re.compile(kw.split("::", 1)[1])
+            items.append((w, kw[3:].split("::", 1)[0], tuple(_required(rx)), not rx.flags & re.I, rx, None))
+            continue
+        cs = kw.isupper()
+        body = r"[\s-]".join(re.escape(x) for x in re.split(r"[\s-]+", kw))
+        parts = re.split(r"[\s-]+", kw)
+        words = tuple(x if cs else x.casefold() for x in parts if x)
+        items.append((w, kw, words, cs, re.compile(rf"(?<![\w-]){body}(?:e?s)?(?![\w-])", 0 if cs else re.I),
+                      bool(parts[0]) and bool(words)))
+    negs = [(n, re.compile(rf"\b{re.escape(n)}\b", re.I)) for n in neg]
+    any_neg = re.compile("|".join(rf"\b{re.escape(n)}\b" for n in neg), re.I) if neg else None
+    _PLAN.update(key=key, plan=(items, negs, any_neg))
+    return _PLAN["plan"]
+
+
+def score(p, cfg, anchor_refs=frozenset()):
+    own = f"{p['title']} {p['title']} {p.get('abstract') or ''}"
+    text = f"{own} {' '.join(p.get('index_terms') or [])}"
+    total, hits, title_w = 0, [], 0
+    items, negs, any_neg = _kw_plan(cfg)  # v3.3.2: precompiled; "low-noise" / "low noise" count once
+    low, title = text.casefold(), p["title"] or ""
+    aligned = len(low) == len(text)  # casefold kept every character's position (no ß → ss): anchored matches work
+    for w, label, words, cs, rx, anchored in items:
+        hay = text if cs else low
+        if anchored is None:  # a re: keyword: its required pieces (_required) first
+            hit = all(any(a in hay for a in alt) for alt in words) and rx.search(text)
+        elif words:
+            pos = hay.find(words[0])
+            if pos < 0 or (len(words) > 1 and not all(x in hay for x in words[1:])):
+                continue  # a word of the keyword isn't in the paper at all: the regex can't match
+            if anchored and (cs or aligned):
+                while pos >= 0 and not rx.match(text, pos):
+                    pos = hay.find(words[0], pos + 1)
+                hit = pos >= 0
+            else:
+                hit = rx.search(text)
+        else:
+            hit = rx.search(text)
+        if hit:
+            total, hits = total + w, hits + [label]
+            if w > 0 and rx.search(title):
                 title_w += w
     # v3.0 title position multiplier: a keyword in the title counts title_multiplier (1.5) times its weight
     bonus = round((scorer.settings(cfg)["title_multiplier"] - 1) * title_w)
@@ -754,7 +859,7 @@ def score(p, cfg, anchor_refs=frozenset()):
     # A negative keyword (telecom / high-speed digital) zeroes only a paper with no pillar keyword at all; with
     # a positive hit, or a title matching negative_override, it costs negative_penalty, once.
     # Not against index terms: IEEE auto-tags bandgaps with "Photonic band gap".
-    neg = next((n for n in cfg["negative_keywords"] if re.search(rf"\b{re.escape(n)}\b", own, re.I)), None)
+    neg = next((n for n, rx in negs if rx.search(own)), None) if any_neg and any_neg.search(own) else None
     if neg:
         override = cfg.get("negative_override") and re.search(cfg["negative_override"], p["title"] or "")
         if not hits and not override:
@@ -780,19 +885,39 @@ def _norm(t):
     return re.sub(r"[^a-z0-9 ]", " ", (t or "").lower()).split()
 
 
+_REL = {"key": None, "rows": None}
+
+
+def _related_index(store):
+    """v3.3.2: every paper's title words, normalised title and first author's surname, read once per run (rebuilt
+    when the store gains or loses papers) instead of decoding all ~10,000 rows for each find_related call."""
+    key = (id(store.db), *store.db.execute("SELECT COUNT(*), MAX(rowid) FROM papers").fetchone())
+    if _REL["key"] != key:
+        rows = []
+        for doi, title, authors, venue, pub in store.db.execute("SELECT doi, title, authors, venue, published FROM papers"):
+            try:
+                a = json.loads(authors) if authors else []
+            except ValueError:
+                a = []
+            t = _norm(title)
+            rows.append((doi, set(t), " ".join(t), (a or [""])[0].split(" ")[-1].lower(), venue, pub, title))
+        _REL.update(key=key, rows=rows)
+    return _REL["rows"]
+
+
 def find_related(p, store):
     """Same work under another DOI (conference ↔ journal extension, re-deposits)."""
     words = set(_norm(p["title"]))
+    pt = " ".join(_norm(p["title"]))
     fam = (p.get("authors") or [""])[0].split(" ")[-1].lower()
     out = []
-    for q in store.where("doi != ?", (p["doi"],)):
-        qw = set(_norm(q["title"]))
-        if not qw or len(words & qw) / len(words | qw) < 0.5:
+    for doi, qw, qt, qfam, venue, pub, title in _related_index(store):
+        if doi == p["doi"] or not qw or len(words & qw) / len(words | qw) < 0.5:
             continue
-        ratio = SequenceMatcher(None, " ".join(_norm(p["title"])), " ".join(_norm(q["title"]))).ratio()
-        same_first = fam and fam == (q.get("authors") or [""])[0].split(" ")[-1].lower()
+        ratio = SequenceMatcher(None, pt, qt).ratio()
+        same_first = fam and fam == qfam
         if ratio > 0.9 or (ratio > 0.7 and same_first):
-            out.append({"doi": q["doi"], "venue": q["venue"], "published": q["published"], "title": q["title"]})
+            out.append({"doi": doi, "venue": venue, "published": pub, "title": title})
     return out[:3]
 
 

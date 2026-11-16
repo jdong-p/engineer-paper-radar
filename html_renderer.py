@@ -320,7 +320,9 @@ async function probe() {
     .concat(SYNC.hosts.map(h => `http://${h}:${SYNC.port}`));
   for (const base of [...new Set(bases)]) {
     try {
-      const r = await fetch(base + '/status', {headers: hdr(), signal: AbortSignal.timeout(SYNC.timeout || 1500), cache: 'no-store'});
+      // v3.3.1: a LAN / Tailscale host gets at least 3.5 s (a relayed tailnet or a sleepy Wi-Fi), this computer 1.5 s
+      const local = base === location.origin || /\/\/(127\.0\.0\.1|localhost)(:|$)/.test(base);
+      const r = await fetch(base + '/status', {headers: hdr(), signal: AbortSignal.timeout(local ? (SYNC.timeout || 1500) : Math.max(SYNC.timeout || 1500, 3500)), cache: 'no-store'});
       if (!r.ok) continue;
       const s = await r.json();
       const serverT = Date.parse(s.updated_at) || 0;

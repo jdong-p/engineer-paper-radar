@@ -63,14 +63,24 @@ def _kw_pillars(cfg):
     return out
 
 
+def digest_pillar(p):
+    """The pillar number a digest written with the reader's own pillars names (PILLAR_DIGEST_VERS), else 0. It is
+    the numbering of when it was written: retire.remap_papers writes it down into papers.pillar before any
+    renumbering (retire, delete, a saved reorder), so a digest that is still read always names a current pillar."""
+    if str(p.get("digest_ver") or "").split("+")[0] not in PILLAR_DIGEST_VERS:
+        return 0
+    m = re.search(r"\*\*Pillar:\*\*\s*\(?(?:Pillar\s*)?(\d+)", p.get("digest") or "")
+    return int(m[1]) if m else 0
+
+
 def pillar_of(p, kwmap):
-    if p.get("pillar"):  # chosen by the user (--add --pillar)
+    if p.get("pillar") is not None:  # chosen by the user (--add --pillar) or pinned by a renumbering; 0 = no pillar
         return p["pillar"]
     if p.get("retired_pillar"):  # v3.0.8: 🏺 a retired pillar's paper never joins a later pillar with that number
         return 0
-    m = re.search(r"\*\*Pillar:\*\*\s*\(?(?:Pillar\s*)?(\d+)", p.get("digest") or "")
-    if m and str(p.get("digest_ver") or "").split("+")[0] in PILLAR_DIGEST_VERS and int(m[1]) in PILLARS and int(m[1]):
-        return int(m[1])
+    d = digest_pillar(p)
+    if d and d in PILLARS:
+        return d
     votes = {}
     for h in p.get("hits") or []:
         if kwmap.get(h) in PILLARS:
@@ -121,12 +131,13 @@ def pillar_replenish(store, cfg, week, per_pillar=None, log=print, fresh=True):
         if fresh:
             s, hits = fetcher.score(p, cfg)
             if s != p["score"] or hits != (p.get("hits") or []):  # keeps the stored-score ranking current
-                store.update(p["doi"], {"score": s, "hits": hits})
+                store.update(p["doi"], {"score": s, "hits": hits}, commit=False)  # one commit below (v3.3.2)
         else:
             s, hits = p["score"] or 0, p.get("hits") or []
         k = pillar_of({**p, "hits": hits}, kwmap)
         if s >= cfg["min_score"] and need.get(k):
             picks[k].append((s + (cu.get("flagship_bonus", 0) if p["venue"] in flagship else 0), s, hits, p))
+    store.db.commit()
     added = {}
     for k, lst in picks.items():
         lst.sort(key=lambda t: (-t[0], -(relations._ym(t[3]["published"]) or 0)))  # ties: newest first

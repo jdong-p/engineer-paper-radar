@@ -207,7 +207,7 @@ class Store:
             self.update(p["doi"], fill)
         return False
 
-    def update(self, doi, fields, insert=False):
+    def update(self, doi, fields, insert=False, commit=True):  # commit=False: the caller commits a batch (v3.3.2)
         fields = {k: (json.dumps(v, ensure_ascii=False) if k in JSON_COLS else v) for k, v in fields.items()
                   if k in COLS}
         if insert:
@@ -217,7 +217,8 @@ class Store:
         elif fields:
             self.db.execute(f"UPDATE papers SET {','.join(k + '=?' for k in fields)} WHERE doi=?",
                             [*fields.values(), doi])
-        self.db.commit()
+        if commit:
+            self.db.commit()
 
     def meta(self, key, value=None):
         if value is None:
