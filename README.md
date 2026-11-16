@@ -1,4 +1,4 @@
-# 📡 Engineer Paper Radar (v3.2.3)
+# 📡 Engineer Paper Radar (v3.3.0)
 
 **A free, local radar for new engineering and science papers, tuned to your own research.**
 
@@ -31,10 +31,25 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
 `STARTUP.html` 配置和运行，用 `DASHBOARD.html` 阅读和标记。`config.json`、数据库和 `output/` 只在你的电脑上，不进 Git。
 团队可选用私有数据仓库共享干净语料和各自的标记。每周五：07:00 拉取并在本地生成周报，上午整理，12:00 上传。
 
-## ✨ What's new in v3.2.3
-*v3.2.3 亮点*
+## ✨ What's new in v3.3.0
+*v3.3.0 亮点*
 
-1. **📅 Your own year boundaries (v3.2.3):** the 🔎 Topic Deep-Dive card has compact inputs for the
+1. **📚 Watched Venues in Step 1 (v3.3.0):** `STARTUP.html` → Step 1 shows the journals and conferences the radar
+   fetches as cards (📖 Journal + ISSN, or 🎤 Conf + its title pattern), each with a **⭐ Flagship** toggle and
+   **✕ Remove** (your papers stay). Add venues from the **📋 Quick-Pick Catalog** (34 IC / ECE venues: RF / mmWave,
+   power, digital / EDA, devices, sensors, MEMS, photonics) or look one up by ISSN, title or conference name.
+   Before it is added, the radar checks it live with Crossref and OpenAlex (no key) and shows what it found:
+   recent papers for a journal; for a conference, the ✅ matched and 🛡️ excluded proceedings titles, so a pattern
+   for DAC can't pick up ASP-DAC ([details](#watched-venues)).\
+   **第 1 步 · 📚 关注的期刊与会议**：以卡片显示，可设 ⭐ 旗舰、✕ 移除（已有论文保留）；可从 📋 精选目录（34 个 IC / ECE
+   期刊会议）添加，或按 ISSN、刊名、会议名查找。添加前通过 Crossref / OpenAlex 实时核对并请你确认。
+2. **🟢 SYNC ▾ and 📥 REF EXPO ▾ (v3.3.0):** the dashboard header is shorter. One **SYNC** pill covers the radar
+   server, your shared data repo and updates, and turns 🟢 when all of them are in sync (with the age of your last
+   repo pull, e.g. `🟢 SYNC 2 d`); its menu holds 💾 Save Marks, the last pull / sync time, each repo's newest
+   commit and any new version or PR. **REF EXPO** holds both BibTeX exports. **📚 Switch Radar / Repo ▾** and
+   each peer page show when every radar was last updated.\
+   面板顶栏更紧凑：**SYNC** 合并了服务器、共享仓库与更新状态，全部同步时显示 🟢；**REF EXPO** 合并了两个 BibTeX 导出。
+3. **📅 Your own year boundaries (v3.2.3):** the 🔎 Topic Deep-Dive card has compact inputs for the
    **earliest year** (papers before it are ignored by dives and recalls; blank = all years), the
    **🏛️ classics / 🚀 recent split year** (default 2023) and **how many** of each (default 6 + 8). Step 3 sets the
    **⏪ Weekly Catch-up & Seed earliest year** (`catch_up.since`, default 2025). From a terminal:
@@ -42,13 +57,13 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    专题深挖卡片可设置最早年份（更早的论文不参与专题和检索，留空 = 不限）、经典 / 近期分界年份和各自篇数；第 3 步可设置
    ⏪ 每周补录与种子的最早年份。命令行可用 `--min-year` / `--split-year` 临时调整。
-2. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
+4. **⚡ One-command install and an environment doctor (v3.2.1):** one line in PowerShell or Terminal installs
    what's missing (Git, Python), clones the radar, asks two optional questions and opens `STARTUP.html`; see
    [One-command install](#one-command-install). `python install.py --doctor` checks your setup and prints the
    exact fix for anything missing.\
    一行命令完成安装：自动安装缺少的 Git / Python、克隆项目、回答两个可选问题并打开 `STARTUP.html`。
    `python install.py --doctor` 检查环境，并给出缺失项的修复命令。
-3. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
+5. **🔔 Updates, auto-clone and a Friday schedule (v3.2.0):**
    - `STARTUP.html` tells you when GitHub has a **new radar version** (🚀 … **⬆️ Update Radar Now**: a
      `git pull`; a ZIP copy is turned into a Git clone and keeps your `config.json`, store and `output/`) and
      when a teammate pushed to your **shared repo** (🔔 … **📥 Pull Updates Now**). The dashboard shows a quiet
@@ -65,7 +80,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `output/`）以及共享仓库的新提交（📥 一键拉取）。在第 2 步填写 `remote_url` 并保存即自动克隆。**⏰ 周五计划**：
    07:00 拉取并在本地生成周报，12:00 上传干净语料和你周五上午的标记，时间可调，**⏰ Save & Apply** 写入系统计划任务。
    取消勾选 **🏷️ 共享标签** 后，下次同步会从共享仓库删除你的 `peers/<id>.json`，干净论文照常同步。
-4. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
+6. **🧩 A calmer `STARTUP.html` (v3.1.0):** a top **cockpit** groups the status into 🎯 Required Setup
    (`X/3 Ready`), 🤝 Shared Data Repo & Peers and ⚙️ Optional Boosters, next to the daily buttons (▶ Run &
    Update Dashboard, 🔄 Full Sync, 📥 Read / Pull, 📊 Open Dashboard, 💾 Save Config). Below it, setup is
    **4 numbered steps** that fold away once they are complete, each with its own buttons. Larger type, and
@@ -74,7 +89,7 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    DOIs can be pasted several at once, one per line or comma-separated.\
    更清爽的控制中心：顶部 “驾驶舱” 将状态分为三组，并放置常用按钮；下方是 4 个编号步骤，完成后自动折叠，每一步都有
    自己的按钮。字号更大，长说明收进 **💡 How this works**。v3.1.2 起，长输入（路径、仓库地址、方向名、DOI、种子词、查询）会自动换行并随内容增高，可一次粘贴多个 DOI。
-5. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
+7. **🐍 Python 3.8+ (v3.0.9):** the radar now runs on Python 3.8 and every newer version, and this is tested.
    **A correction:** v3.0 to v3.0.8 said "Python 3.11+", but `briefing.py` really needed **3.12**. On Python 3.11
    or older it stopped with a `SyntaxError`. If that happened to you, you don't need a new Python: update this
    folder (`git pull`) and it runs.
@@ -85,21 +100,21 @@ bioRxiv / medRxiv）** 以及 **化学与材料**。纯 Python 标准库：无�
    `briefing.py` 需要 **3.12**，在 Python 3.11 及更低版本上会报 `SyntaxError`。如果你遇到过，无需更换 Python，
    只要更新本项目（`git pull`）即可。若 Python 低于 3.8（或为 Python 2），启动器和
    `python briefing.py` 会显示找到的版本，并给出一行安装命令。
-6. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
+8. **🏺 Retire as Antique (v3.0.8):** retire a pillar or a topic dive without losing anything. Its papers keep a
    🏺 badge with their marks, ⭐, notes and digests, and stay browsable in **🏺 Antiques ▾** and
    **🏺 Past / Antique Dives ▾**. A new pillar with the same number never mixes with them
    ([details](#retiring-a-pillar-or-a-topic-dive--nothing-is-lost)).\
    停用方向或专题而不丢失任何内容：论文保留 🏺 标记、标注、笔记和摘要，随时可在仪表盘中查看。
-7. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
+9. **＋ Add New Pillar (Guided) and 📌 Promote Dive to Weekly Pillar (v3.0.7):** add a research direction
    later in a few clicks. 🪄 plans keywords for the new pillar only, then it is seeded with its first papers;
    your existing pillars and digests stay as they are ([details](#adding-a-pillar-later)).\
    之后可随时用向导新增方向，或把专题直接升级为长期跟踪的方向；已有方向保持不变。
-8. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
+10. **🔎 Topic Deep-Dive in the Control Center (v3.0.6):** the **🔎 Topic Deep-Dive & Local Recall** card runs a
    dive (6 classics + 8 recent papers by default) or a local search with one click, previews how your question is split
    into concept groups, and has a **0-Token Fast Mode**. Dives use your domain preset's wording, and the BioMed
    preset adds PubMed ([details](#catch-up-marks-and-topic-dives-from-the-terminal)).\
    控制中心一键运行专题综述或本地检索，支持 0 token 快速模式，并按领域预设措辞（BioMed 预设加入 PubMed）。
-9. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
+11. **🪄 0-token Auto-Plan (v3.0.5):** keywords, weights and VIP authors planned from your anchors and seed words,
    with no AI call (`--plan-keywords`).\
    不调用 AI，根据锚点论文和种子词自动规划关键词、权重和重点作者。
 ### The v3.0 foundation (v3.0.2)
@@ -287,7 +302,8 @@ sets it. Below, four numbered steps open by themselves while they still need you
 1. **Step 1 · Basic Profile & Discipline Preset (required):** type your **✉️ Contact E-mail** (Crossref and
    OpenAlex answer faster with it) and **💾 Save Step 1**; then click **Apply** on your discipline: 🔬 IC &
    Solid-State Circuits, 🧬 Biology, Biomedical & Medicine, 🧪 Chemistry, Materials & ChemE, or 🛠️ Robotics,
-   Control & General Engineering.\
+   Control & General Engineering. Below it, **📚 Watched Venues** lists the journals and conferences the radar
+   fetches; add your field's venues there ([Watched venues](#watched-venues)).\
    **第 1 步 · 基本信息与学科预设（必需）**：填写 **✉️ 联系邮箱** 并点 **💾 Save Step 1**，然后在你的学科卡片上点 **Apply**。
 2. **Step 2 · Private Shared Repo & Team Sync (recommended for teams):** paste a team repo's URL in
    `remote_url` and **💾 Save**: it is cloned next to the radar (`../<repo name>`). Then
@@ -417,6 +433,37 @@ republish it.
 >
 > 喜欢命令行、AI 助手或无人值守的定时运行？以上所有操作也都可以用命令行完成，见下方的"可选：命令行与定时运行"。
 
+### Watched venues
+*关注的期刊与会议*
+
+`STARTUP.html` → Step 1 → **📚 Watched Venues** edits `config.json` → `venues` and `catch_up.flagship_venues`.
+
+- **Cards:** short code, full title, **📖 Journal · ISSN** or **🎤 Conf** with its `container_regex` (the
+  proceedings title must match it), **⭐ Flagship** (ranks higher in the weekly ⏪ catch-up) and **✕ Remove**.
+  Removing a venue only stops future fetching and back-filling: its papers, marks and notes stay in your store.
+- **📋 Quick-Pick Catalog:** 34 venues with checked ISSNs and strict title patterns, by field: solid-state
+  (JSSC, SSC-L, TCAS-I/II, JETCAS, ISSCC, VLSI, CICC, ESSERC, A-SSCC, ISCAS), RF / mmWave (TMTT, MWTL, RFIC, IMS),
+  power (TPEL, JESTPE, APEC), digital / EDA (TVLSI, TCAD, DAC, ICCAD), devices / sensors / MEMS (EDL, TED, IEDM,
+  IEEE Sensors J. / Letters / Conference, JMEMS), and JLT, TBioCAS, TBME, TIM, Nature Electronics.
+- **🔍 Custom venue:** an ISSN, a journal title or a conference name, an optional short code and, for a
+  conference, an optional pattern (**🪄 Suggest regex** writes one from the name).
+- **Confirmation:** every addition is first checked live with Crossref and OpenAlex (no API key, 5–30 s).
+  A journal shows its official title, publisher, print / electronic ISSN, work count and 3 recent papers (plus
+  other matches for a title search). A conference shows the **✅ matched** and **🛡️ excluded lookalike**
+  proceedings titles and 3 recent matching papers; edit the pattern and **🔁 Re-test** until only the right
+  conference matches, then **✅ Confirm & Add Venue**.
+- **Safety:** a pattern must compile, be at most 200 characters, contain no nested repetition like `(a+)+`, and
+  be specific. `.*`, `.+`, `IEEE`, a bare year or one generic word (`Circuits`) is refused, because it would
+  pull in unrelated proceedings.
+- **Fetching:** an IEEE venue added here works without a looked-up IEEE `publication_number`. The IEEE API is asked
+  by the journal's ISSN or the conference title, and Crossref by ISSN or by proceedings title with the venue's
+  DOI prefixes (`doi_prefix`, e.g. DAC's ACM volumes under 10.1145).
+
+`STARTUP.html` 第 1 步的 **📚 关注的期刊与会议** 编辑 `config.json` 的 `venues` 与 `catch_up.flagship_venues`：卡片显示
+简称、全称、ISSN 或会议标题匹配规则，可设 ⭐ 旗舰（每周补录中排名更高）或 ✕ 移除（只停止以后的抓取，已有论文保留）。
+可从 📋 精选目录添加，也可按 ISSN、刊名或会议名查找；每次添加前都会通过 Crossref / OpenAlex 实时核对，显示近期论文、
+✅ 匹配和 🛡️ 被排除的相似会议名称，确认后才加入。过宽（`.*`、`IEEE`、年份、单个通用词）或可能卡死的规则会被拒绝。
+
 ---
 
 ## Features
@@ -541,9 +588,16 @@ v3.0 新增：FTS5 全文检索、更少的 API 调用、更智能的打分（�
 ### Curation
 *整理论文*
 
-On the dashboard, click ✅ Select / ⭐ Cite / 🗄️ Archive. Clicks are kept in your browser; **💾 Save Marks**
-downloads `curation_marks.json` (to your Downloads folder), and the next run (any button in `STARTUP.html`)
-applies it. **📥 Download cite.bib** exports your ⭐ papers.
+On the dashboard, click ✅ Select / ⭐ Cite / 🗄️ Archive. Clicks are kept in your browser; **SYNC ▾ →
+💾 Save Marks** downloads `curation_marks.json` (to your Downloads folder), and the next run (any button in
+`STARTUP.html`) applies it. **📥 REF EXPO ▾** exports your ⭐ papers (`cite.bib`) or ✅ + ⭐ (`selected_pool.bib`).
+
+**🟢 SYNC ▾** in the header sums up three things: the radar server (live, or 🟡 offline with N clicks
+queued), your shared data repo (when you last pulled or synced it and each repo's newest commit; 🟡 after
+8 days) and updates (a new radar version, new shared commits, pull requests). It turns 🟢 when all of them are
+in sync and shows how long ago you last pulled the repo.
+
+顶栏的 **SYNC ▾** 汇总服务器、共享数据仓库（上次拉取 / 同步时间、各仓库最新提交）与更新状态，全部同步时显示 🟢。
 
 在面板上点击按钮标记论文；点 **💾 Save Marks** 下载 `curation_marks.json`，下次运行（`STARTUP.html` 中任一按钮）时写入数据库。
 
@@ -668,7 +722,8 @@ its peers) and the share of its papers in venues you use.
 
 **📚 Switch Radar / Repo ▾** in the dashboard's header lists every dashboard by the private repo it comes
 from: your primary repo (📡 My Radar and its peers), repos merged into your corpus, and each isolated external
-repo, each with its field's icon. Every peer page has a **← Back to My Radar** button.
+repo, each with its field's icon, when you last synced the repo and when each peer last updated their radar.
+Every peer page has a **← Back to My Radar** button and shows the same two times.
 
 面板顶部的 **📚 Switch Radar / Repo ▾** 按来源私有仓库列出所有面板（你的主仓库、已合并的仓库、各个隔离的外部仓库），
 每个同事页面都有 **← Back to My Radar** 按钮。
@@ -1185,6 +1240,7 @@ python briefing.py --adopt-external                     # later: take the ones t
 | `Start_Radar_GUI.cmd`, `Start_Radar_GUI.command`, `control_center.py` | The Setup & Control Center (`output/STARTUP.html`, `--gui`)<br>控制中心 |
 | `install.ps1`, `install.sh`, `Install_Radar.cmd`, `Install_Radar.command`, `install.py` | One-command installer (Git, Python, clone, setup) and `--doctor`<br>一键安装与环境检查 |
 | `fetcher.py`, `topic.py`, `relations.py`, `pins.py` | Collection, scoring, deep-dives, lineage, pinning |
+| `venues.py` | 📚 Watched venues: the Quick-Pick Catalog, the venue / pattern checks, the live Crossref + OpenAlex check |
 | `data_repo.py` | Private shared data repos: clone, pull, sync, peer overlays (`peers/<id>.json`), `read_repos` |
 | `arxiv_source.py` | The optional arXiv feed (`config.json` → `arxiv`) |
 | `catalog.py`, `html_renderer.py`, `curation.py` | Master table, BibTeX, dashboard, ✅/⭐/🗄️ marks |
@@ -1290,7 +1346,7 @@ If Engineer Paper Radar helps your research, please cite it. GitHub's **"Cite th
   author    = {jdong-p},
   title     = {{Engineer Paper Radar: Automated Literature Intelligence, Verification Filtering, and Federated Curation}},
   year      = {2026},
-  version   = {3.2.3},
+  version   = {3.3.0},
   url       = {https://github.com/jdong-p/engineer-paper-radar},
   license   = {MIT},
   note      = {Contributors: Daidingxx}

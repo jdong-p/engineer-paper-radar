@@ -633,6 +633,28 @@ def _round(store, store_path, cfg, repo, me, adopt, secrets, push, log):
     return True, s["papers"], peers
 
 
+def stamp_sync(store, cfg, action, repo=None):
+    """v3.3.0: meta last_repo_sync = when this radar last finished a pull (--pull-data-repo) or a full sync
+    (--sync-data-repo), even when no commit came in, with each repo's newest commit date at that moment. The
+    dashboard's SYNC menu and the 📚 Switch Radar / Repo menu show it."""
+    def head(d):
+        try:
+            return _git(d, "log", "-1", "--format=%cI", check=False).stdout.strip()[:25] if (d / ".git").exists() else ""
+        except Exception:
+            return ""
+    repos = [{"label": primary_label(cfg), "kind": "primary", "head": head(repo)}] if repo is not None else []
+    for e in read_repo_entries(cfg):
+        try:
+            d = read_repo_dir(cfg, e["spec"])
+        except Exception:
+            continue
+        if d.exists():
+            repos.append({"label": repo_label(e["spec"]), "kind": "read", "head": head(d)})
+    info = {"at": datetime.now().isoformat(timespec="seconds"), "action": action, "repos": repos}
+    store.meta("last_repo_sync", info)
+    return info
+
+
 def pull_only(store, cfg, adopt=None, log=print):
     """Read only (briefing.py --pull-data-repo, STARTUP.html's 📥 Read from Private Repo): steps 1 and 2 of a sync.
     Fetch + reset to origin/main, every other peer's overlay into peer_curation, the shared file merged into this
@@ -644,8 +666,10 @@ def pull_only(store, cfg, adopt=None, log=print):
     if why and (cfg.get("data_repo") or {}).get("read_repos"):
         me = peer_id(cfg, None)
         log(f"No primary data repo ({why}): reading data_repo.read_repos only")
-        return {"papers": 0, "new": 0, "enriched": 0, "adopted": 0, "peers": {},
-                "read_repos": pull_read_repos(store, cfg, me, adopt, log)}
+        out = {"papers": 0, "new": 0, "enriched": 0, "adopted": 0, "peers": {},
+               "read_repos": pull_read_repos(store, cfg, me, adopt, log)}
+        stamp_sync(store, cfg, "pull")
+        return out
     if why:
         raise RuntimeError(why)
     me = peer_id(cfg, repo)
@@ -667,6 +691,7 @@ def pull_only(store, cfg, adopt=None, log=print):
         log(msg)
     out["read_repos"] = pull_read_repos(store, cfg, me, adopt, log)
     log("  read only: nothing exported or pushed (🔄 Full Sync / --sync-data-repo does that)")
+    stamp_sync(store, cfg, "pull", repo)
     return out
 
 
@@ -687,7 +712,9 @@ def sync(store, store_path, cfg, adopt=None, secrets=(), push=True, log=print):
     for attempt in range(1, attempts + 1):
         done, n, peers = _round(store, store_path, cfg, repo, me, adopt, secrets, push, log)
         if done:  # then the repos shared with this radar for reading (v3.0), never pushed
-            return {"papers": n, "peers": peers, "read_repos": pull_read_repos(store, cfg, me, adopt, log)}
+            rr = pull_read_repos(store, cfg, me, adopt, log)
+            stamp_sync(store, cfg, "sync", repo)
+            return {"papers": n, "peers": peers, "read_repos": rr}
         if attempt < attempts:
             wait = random.uniform(*PUSH_BACKOFF)
             log(f"  retry {attempt}/{PUSH_RETRIES} from step 1 in {wait:.1f} s")

@@ -32,6 +32,7 @@ from env_guard import ensure_minisforum_env
 
 ensure_minisforum_env()
 import scorer  # v3.0 boosters (coupling, taste)
+import venues as venue_rules  # v3.3.0: IEEE query / Crossref prefixes of a venue
 HERE = Path(__file__).resolve().parent
 IEEE_URL = "https://ieeexploreapi.ieee.org/api/v1/search/articles?"
 
@@ -326,10 +327,13 @@ def _from_ieee(a, venue):
 
 
 def ieee_venue_window(venue, cfg, store, start, end, log, start_record=1):
-    """All papers IEEE inserted for `venue` between start..end. Returns (papers, next_start_record|None)."""
+    """All papers IEEE inserted for `venue` between start..end. Returns (papers, next_start_record|None).
+    v3.3.0: the query is venue_rules.ieee_params (ieee_query, else an IEEE journal's ISSN or conference title)."""
     out = []
+    params = venue_rules.ieee_params(venue) or {}
+    by_issn = "issn" in params and not venue.get("ieee_query")
     while True:
-        r = _ieee({**venue["ieee_query"], "start_date": start.strftime("%Y%m%d"), "end_date": end.strftime("%Y%m%d"),
+        r = _ieee({**params, "start_date": start.strftime("%Y%m%d"), "end_date": end.strftime("%Y%m%d"),
                    "max_records": 200, "start_record": start_record}, cfg, store, log)
         if r is None:
             return out, start_record  # budget gone mid-window: resume here next time
@@ -339,6 +343,8 @@ def ieee_venue_window(venue, cfg, store, start, end, log, start_record=1):
                 continue
             if venue.get("container_regex") and not re.search(venue["container_regex"], a.get("publication_title", ""), re.I):
                 continue
+            if by_issn and a.get("issn") and a["issn"] not in venue.get("issn", []):
+                continue  # a derived ISSN query: keep only that journal's articles
             out.append(_from_ieee(a, venue))
         start_record += len(arts)
         if not arts or start_record > (r.get("total_records") or 0):
@@ -364,8 +370,9 @@ def crossref_venue(venue, cfg, since):
     queries = [{"filter": ",".join([f"issn:{i}" for i in venue["issn"]] + [f"from-created-date:{since}"]), **common}] \
         if venue["issn"] else []  # no ISSN (ESSERC): an ISSN-less filter would return all of Crossref
     if venue["type"] == "conference":
+        pre = ",".join(f"prefix:{x}" for x in venue_rules.crossref_prefixes(venue))  # v3.3.0: e.g. DAC's 10.1145 too
         queries.append({"query.container-title": venue.get("title_query", venue["name"]),
-                        "filter": f"prefix:10.1109,type:proceedings-article,from-created-date:{since}", **common})
+                        "filter": f"{pre},type:proceedings-article,from-created-date:{since}", **common})
     out = {}
     for q in queries:
         for it in json.loads(_get(base + urllib.parse.urlencode(q), cfg))["message"].get("items", []):
@@ -818,7 +825,7 @@ def collect(cfg, store, today, log=print, backfill=True):
 
     for v in cfg["venues"]:
         got = {}
-        if v.get("ieee_query"):
+        if venue_rules.ieee_params(v):
             papers, _ = ieee_venue_window(v, cfg, store, since, today, log)
             got.update({p["doi"]: p for p in papers})
         src = SOURCES.get(v.get("source") or "")  # v3.0: PubMed / bioRxiv / medRxiv venues
@@ -882,7 +889,7 @@ def collect(cfg, store, today, log=print, backfill=True):
 def run_backfill(cfg, store, today, log):
     """Spend the rest of today's IEEE budget pulling older months into the corpus (status archive)."""
     floor = date.fromisoformat(cfg["backfill_floor"])
-    venues = [v for v in cfg["venues"] if v.get("ieee_query")]
+    venues = [v for v in cfg["venues"] if venue_rules.ieee_params(v)]
     added, idle = 0, 0
     while idle < len(venues) and store.calls_today("ieee") < cfg["ieee_daily_budget"] and os.environ.get("IEEE_API_KEY", "").strip():
         v = venues[(store.meta("backfill_rr") or 0) % len(venues)]

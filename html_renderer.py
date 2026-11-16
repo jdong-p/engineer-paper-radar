@@ -167,6 +167,8 @@ padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--
 input.note:focus{outline:none;border-color:var(--accent)}.nstate{color:var(--ok);font-size:12px}
 .welcome{margin:10px 12px;padding:14px 16px;border:2px solid var(--accent);border-radius:10px;background:var(--chip);font-size:15px;line-height:1.5}
 .peerbanner{margin:0;padding:10px 16px;background:var(--citebg);border-bottom:2px solid var(--cite);font-size:14.5px}
+.syncmenu{min-width:300px;max-width:min(440px,92vw)}.syncmenu .srow{font-size:13px;padding:2px 4px;white-space:normal;overflow-wrap:anywhere}
+.syncmenu .srow.small{font-size:12px;color:var(--muted)}#syncpill small,.menu .mt{font-size:11.5px;font-weight:400;opacity:.8}
 .peers{position:relative;display:inline-block}.peers>summary{list-style:none}.peers>summary::-webkit-details-marker{display:none}
 .btn:disabled{opacity:.7;cursor:default}input.note[readonly]{border:0;background:transparent}
 tr.banner td{background:var(--chip);font-weight:600;font-size:14.5px;border-top:2px solid var(--accent)}
@@ -217,7 +219,7 @@ document.addEventListener('toggle', e => {
   const r = d.querySelector('summary').getBoundingClientRect();
   document.body.appendChild(m);
   m.classList.add('float', 'portal'); m.style.position = 'fixed'; m.style.zIndex = '100';
-  if (innerWidth > 768) { m.style.left = Math.max(8, Math.min(r.left, innerWidth - 280)) + 'px'; m.style.right = 'auto'; }
+  if (innerWidth > 768) { m.style.left = Math.max(8, Math.min(r.left, innerWidth - (m.offsetWidth || 280) - 8)) + 'px'; m.style.right = 'auto'; }
   m.style.top = (r.bottom + 4) + 'px';
 }, true);
 function closeHeadMenus(except) {
@@ -296,6 +298,8 @@ function setMark(doi, mark) {
 // ---------- tier 1: live sync with radar_sync_server.py (not part of the Starter Edition) ----------
 const SYNC = PAGE.sync || {hosts: [], port: 0, token: ''};
 // v3.2.0: a quiet line at the top when the radar server (Control Center or sync server) reports updates
+let UPDR = null, PROBED = false, SYNC_FLASH = null;
+// v3.2.0 → v3.3.0: the radar server's update check (new code, shared repo commits, PRs) feeds the SYNC menu
 async function updNotice() {
   if (RO || window.__updDone) return; window.__updDone = true;
   const own = location.protocol.startsWith('http') ? [location.origin] : [];
@@ -304,27 +308,13 @@ async function updNotice() {
     const hd = {}; if (base === location.origin) hd['X-Radar-GUI'] = '1'; if (SYNC.token) hd['X-Radar-Token'] = SYNC.token;
     let r; try { r = await (await fetch(base + '/api/check_updates', {headers: hd, credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(20000)})).json(); } catch (e) { continue; }
     if (!r || !r.ok) continue;
-    const msgs = [];
-    if (r.code && r.code.state === 'behind') msgs.push(`🚀 New radar version on GitHub${r.code.behind ? ` (${r.code.behind} new commit${r.code.behind === 1 ? '' : 's'})` : ''}`);
-    const rb = (r.repos || []).filter(x => x.state === 'behind').map(x => x.label);
-    if (rb.length) msgs.push(`🔔 ${rb.join(', ')}: new shared commits`);
-    for (const p of (r.pr_watch || [])) msgs.push(`🔀 PR #${p.number} ${({needs_review: 'needs your review', already_fixed: 'is already fixed in main', audit_failed: 'failed PR audit', merge_failed: 'auto-merge failed'})[p.status] || p.status}`);
-    if (!msgs.length) return;
-    const bar = document.createElement('div');
-    bar.className = 'updnote';
-    bar.style.cssText = 'margin:6px 12px;padding:6px 12px;border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;background:var(--chip);font-size:13.5px';
-    bar.textContent = msgs.join(' · ') + ' — ';
-    const a = document.createElement('a');
-    a.href = (location.pathname.match(/\/(Weekly_Briefings|Topic_Dives|Peers)\//) ? '../' : '') + 'STARTUP.html';
-    a.textContent = 'open ⚙️ Setup to update'; bar.append(a);
-    const hdr = document.querySelector('header.bar'); if (hdr) hdr.after(bar); else document.body.prepend(bar);
-    return;
+    UPDR = r; pill(); return;
   }
 }
 let LIVE = null;   // base URL of the reachable server
 function hdr() { return {'Content-Type': 'application/json', 'X-Radar-Token': SYNC.token}; }
 async function probe() {
-  if (RO) { LIVE = null; pill(); return; }  // never /status or /mark from a peer's page
+  if (RO) { LIVE = null; PROBED = true; pill(); return; }  // never /status or /mark from a peer's page
   // served by radar_sync_server.py itself (iPhone / any browser over http): same origin first, no CORS or file:// limits
   const bases = (location.protocol.startsWith('http') ? [location.origin] : [])
     .concat(SYNC.hosts.map(h => `http://${h}:${SYNC.port}`));
@@ -348,13 +338,13 @@ async function probe() {
         }
         PAGE.notes = Object.assign({}, s.notes);
       }
-      LIVE = base; persist(); pill(); refreshBars(); if (window.onMarkChange) window.onMarkChange(null);
+      LIVE = base; PROBED = true; persist(); pill(); refreshBars(); if (window.onMarkChange) window.onMarkChange(null);
       if (window.onLive) window.onLive();  // the dashboard syncs its shared settings (bar layout)
       if (pending()) flush();
       return;
     } catch (e) { /* try the next host */ }
   }
-  LIVE = null; pill();
+  LIVE = null; PROBED = true; pill();
 }
 let flushing = false;
 async function flush() {
@@ -412,18 +402,75 @@ async function chooseFile() {
     types: [{description: 'JSON', accept: {'application/json': ['.json']}}]});
   await idb('readwrite', s => s.put(h, 'marks_handle')); HANDLE = h; return h;
 }
+// v3.3.0: one SYNC ▾ pill for the radar server, the shared data repo and updates: 🟢 when all of them are in sync
+const SRV = 'the radar server';
+function syncT(iso) { return String(iso || '').slice(0, 16).replace('T', ' '); }
+function syncAge(iso) {
+  const t = Date.parse(iso); if (!t) return '';
+  const m = Math.max(0, (Date.now() - t) / 60000);
+  return m < 60 ? Math.max(1, Math.round(m)) + ' min' : m < 1440 ? Math.round(m / 60) + ' h' : Math.round(m / 1440) + ' d';
+}
+function syncEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c])); }
+function syncIssues() {
+  const out = [], rs = PAGE.repo_sync;
+  if (!RO && !LIVE) out.push('offline');
+  if (!RO && pending()) out.push(pending() + ' queued');
+  if (rs && rs.configured) {
+    if (!rs.at) out.push('repo never synced');
+    else if (Date.now() - Date.parse(rs.at) > 8 * 864e5) out.push('repo synced ' + syncAge(rs.at) + ' ago');
+  }
+  if (UPDR) {
+    if (UPDR.code && UPDR.code.state === 'behind') out.push('new radar version');
+    const rb = (UPDR.repos || []).filter(x => x.state === 'behind');
+    if (rb.length) out.push(rb.length === 1 ? 'repo update' : rb.length + ' repo updates');
+    const pr = (UPDR.pr_watch || []).length; if (pr) out.push(pr === 1 ? '1 PR' : pr + ' PRs');
+  }
+  return out;
+}
 function pill(flash) {
+  if (flash) SYNC_FLASH = {f: flash, t: Date.now()};
   const el = document.getElementById('syncpill'); if (!el) return;
-  if (RO) { el.textContent = '👤 Read-only'; el.className = 'btn pill';
-    el.title = "A collaborator's radar: nothing you click here changes your own radar"; return; }
-  if (LIVE) { el.textContent = flash === 'saved' ? '🟢 Live Sync · saved' : '🟢 Live Sync';
-    el.title = 'Clicks go straight to ' + LIVE; el.className = 'btn pill live'; return; }
-  el.className = 'btn pill offline';
-  el.textContent = HANDLE ? (flash === 'file' ? '🟡 Offline · saved to file' : '🟡 Offline · auto-saving to file')
-                          : '🟡 Offline Mode (Queued Locally)';
-  el.title = 'Clicks are kept in this browser. ' +
-    (window.showSaveFilePicker ? 'Click to pick paper_radar_starter › output › curation_marks.json once; later clicks save there automatically.'
-                               : 'Use 💾 Save Marks to export them.');
+  const iss = syncIssues(), rs = PAGE.repo_sync, age = rs && rs.at ? syncAge(rs.at) : '';
+  const fl = SYNC_FLASH && Date.now() - SYNC_FLASH.t < 4000 ? SYNC_FLASH.f : '';
+  const tail = age ? ` <small title="shared repo last pulled / synced">${age}</small>` : '';
+  if (!PROBED && !RO) { el.className = 'btn pill'; el.innerHTML = '⏳ SYNC'; }
+  else if (RO) { el.className = 'btn pill'; el.innerHTML = '👤 SYNC' + tail; }
+  else if (!iss.length) { el.className = 'btn pill live'; el.innerHTML = '🟢 SYNC' + (fl === 'saved' ? ' · saved' : '') + tail; }
+  else { el.className = 'btn pill offline'; el.innerHTML = '🟡 SYNC · ' + syncEsc(fl === 'file' ? 'saved to file' : iss[0]) + (iss.length > 1 ? ` <small>+${iss.length - 1}</small>` : ''); }
+  el.title = RO ? "A collaborator's radar (read-only) · click for sync details"
+    : (iss.length ? 'Needs attention: ' + iss.join(' · ') : 'Radar server, shared repo and updates are all in sync') + ' · click for details';
+  syncMenu();
+}
+function syncMenu() {
+  const m = document.getElementById('syncmenu'); if (!m) return;
+  const rs = PAGE.repo_sync, r = [], setup = (location.pathname.match(/\/(Weekly_Briefings|Topic_Dives|Peers)\//) ? '../' : '') + 'STARTUP.html';
+  r.push('<div class="mhead">📡 Radar server (your marks)</div>');
+  if (RO) r.push(`<div class="srow">👤 Read-only: a collaborator's radar. Nothing you click here changes your own radar.</div>`);
+  else if (LIVE) r.push(`<div class="srow">🟢 Live Sync: clicks go straight to ${syncEsc(LIVE)}${pending() ? ` · ${pending()} sending…` : ''}</div>`,
+                        '<button class="btn" onclick="probe()">🔄 Re-check</button>');
+  else if (!PROBED) r.push('<div class="srow">⏳ Looking for the radar server…</div>');
+  else r.push(`<div class="srow">🟡 Offline: ${SRV} is not reachable. Clicks are kept in this browser${HANDLE ? ' and auto-saved to your curation_marks.json' : ''}.</div>`,
+              `<button class="btn" onclick="pillClick()">🔄 Retry${window.showSaveFilePicker ? ' / 📁 auto-save to curation_marks.json' : ''}</button>`);
+  if (!RO) r.push(`<button class="btn" onclick="saveMarks()" title="Only needed offline">💾 Save Marks (<span id="pending" class="count">${pending()}</span> queued)</button>`);
+  r.push('<div class="mhead">📚 Shared data repo</div>');
+  if (!rs || !rs.configured) r.push('<div class="srow small">⚪ No shared repo set up (⚙️ Setup → Step 2). Solo use works fine.</div>');
+  else {
+    r.push(rs.at ? `<div class="srow">🔄 Last ${rs.action === 'sync' ? 'full sync (pull + upload)' : 'pull'}: <b>${syncT(rs.at)}</b> (${syncAge(rs.at)} ago)</div>`
+                 : '<div class="srow">⚪ Not pulled or synced on this computer yet</div>');
+    for (const x of rs.repos || []) r.push(`<div class="srow small">${x.kind === 'primary' ? '🏠' : '📖'} ${syncEsc(x.label)}: newest commit ${x.head ? syncT(x.head) : '–'}</div>`);
+    for (const x of (UPDR && UPDR.repos) || []) if (x.state === 'behind') r.push(`<div class="srow">🔔 ${syncEsc(x.label)}: new shared commits on GitHub</div>`);
+  }
+  r.push('<div class="mhead">🚀 Updates</div>');
+  if (!UPDR) r.push(`<div class="srow small">${RO ? 'Checked on your own dashboard' : 'Checked when the radar server is reachable'}</div>`);
+  else {
+    const c = UPDR.code || {};
+    r.push(c.state === 'behind' ? `<div class="srow">🚀 New radar version on GitHub${c.behind ? ` (${c.behind} new commit${c.behind === 1 ? '' : 's'})` : ''}</div>`
+      : `<div class="srow small">${({current: '✅ Radar code up to date', offline: '⚪ Radar code: GitHub not reachable',
+           zip: '⚪ Radar code: installed from a ZIP (no update check)'})[c.state] || '⚪ Radar code: not a git checkout (no update check)'}</div>`);
+    for (const p of UPDR.pr_watch || []) r.push(`<div class="srow">🔀 <a href="${syncEsc(p.url)}" target="_blank" rel="noopener">PR #${p.number}</a> ${syncEsc(({needs_review: 'needs your review', already_fixed: 'is already fixed in main', audit_failed: 'failed PR audit', merge_failed: 'auto-merge failed'})[p.status] || p.status)}</div>`);
+  }
+  r.push(`<a class="btn" href="${setup}">⚙️ Open Setup to pull / sync / update</a>`);
+  m.innerHTML = r.join('');
 }
 async function pillClick() {
   if (RO) return;
@@ -465,7 +512,7 @@ function refreshBars() {
   const n = document.getElementById('bibn'); if (n) n.textContent = markedDois(false).length;
   const k = document.getElementById('pooln'); if (k) k.textContent = markedDois(true).length;
   document.querySelectorAll('[data-nstate]').forEach(el => el.textContent = noteState(el.dataset.nstate));
-  refreshCur();
+  refreshCur(); pill();
 }
 // ⭐ papers, or (pool) ✅ Selected or ⭐ papers — known to the page or only clicked in this browser
 function markedDois(pool) {
@@ -522,17 +569,19 @@ refreshBars(); pill(); probe(); setInterval(() => {{ if (!LIVE) probe(); }}, 600
 
 
 def _bar(title, home=None, extra="", readonly=False, home_label="← Dashboard"):
+    """The page header. v3.3.0: SYNC ▾ (radar server · shared repo · updates, 🟢 when all are in sync, with 💾 Save
+    Marks inside) and REF EXPO ▾ (cite.bib · selected_pool.bib) keep the bar short."""
     return (f'<h1>{html.escape(title)}</h1>'
             + (f'<a class="btn" href="{home}">{html.escape(home_label)}</a>' if home else "") + extra
-            + '<button id="syncpill" class="btn pill" onclick="pillClick()">⏳ Connecting…</button>'
+            + '<details class="peers hsync"><summary id="syncpill" class="btn pill" title="Radar server, shared repo and '
+              'updates">⏳ SYNC</summary><div class="menu syncmenu" id="syncmenu"></div></details>'
             # on a phone the secondary buttons fold behind ⋯ (CSS .sec / .msec)
             + '<button class="btn msec" onclick="this.parentElement.classList.toggle(\'showsec\')" title="More">⋯</button>'
-            + '<button class="btn sec" onclick="downloadBib(false)" title="⭐ Cite papers only, for Overleaf">'
-              '📥 Download cite.bib (⭐ <span id="bibn" class="count">0</span>)</button>'
-            + '<button class="btn sec" onclick="downloadBib(true)" title="✅ Selected + ⭐ Cite">'
-              '📥 Download selected_pool.bib (✅+⭐ <span id="pooln" class="count">0</span>)</button>'
-            + ('' if readonly else '<button class="btn" onclick="saveMarks()" title="Only needed offline">💾 Save Marks '
-               '(<span id="pending" class="count">0</span> queued)</button>')
+            + '<details class="peers sec"><summary class="btn" title="Reference export (BibTeX for Overleaf)">📥 REF EXPO ▾</summary>'
+              '<div class="menu"><button class="btn" onclick="downloadBib(false)" title="⭐ Cite papers only, for Overleaf">'
+              '📥 cite.bib · ⭐ Cite (<span id="bibn" class="count">0</span>)</button>'
+              '<button class="btn" onclick="downloadBib(true)" title="✅ Selected + ⭐ Cite">'
+              '📥 selected_pool.bib · ✅ + ⭐ (<span id="pooln" class="count">0</span>)</button></div></details>'
             + '<button class="btn sec" onclick="theme()" title="light/dark">◐</button>')
 
 
@@ -1039,7 +1088,7 @@ def write_dashboard(store, cfg, path, peers=()):
                         for i, n in enumerate(cfg.get("pillars") or [], 1)],
             "antiques": [{"k": f"ant{i}", "key": k, **v} for i, (k, v) in  # v3.0.8: 🏺 retired pillars
                          enumerate(sorted((store.meta("retired_pillars") or {}).items(), key=lambda kv: kv[1].get("retired_at", "")), 1)],
-            "weeks": weekly_reports(cfg), "sync": curation.page_sync_config(cfg),
+            "weeks": weekly_reports(cfg), "sync": curation.page_sync_config(cfg), "repo_sync": repo_sync_info(store, cfg),
             "welcome": not fetcher.pillars_ready(cfg), "badge": presets.badge(cfg)}
     n_store = store.db.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
     welcome = (f"""<div class="welcome">👋 <b>Welcome to Engineer Paper Radar!</b> No research pillars are configured yet.
@@ -1051,12 +1100,12 @@ Open <code>README.md</code> to configure your research domains with AI"""
         welcome += (f'<div class="welcome">💡 {html.escape(fetcher.STORE_TIP)}'
                     + ("" if data["welcome"] else CTA) + '</div>')
     body = welcome + _dash_body(data["generated"], '<a href="INDEX.md">INDEX.md</a>',
-                                "Click a row for the full digest. Clicks are kept in this browser; <b>💾 Save Marks</b> "
+                                "Click a row for the full digest. Clicks are kept in this browser; <b>SYNC ▾ → 💾 Save Marks</b> "
                                 "sends them to the Radar (curation_marks.json in output/ or Downloads), applied on the next "
                                 "run or <code>briefing.py --sync</code>.")
     setup = (SETUP_BTN.replace('class="btn"', 'class="btn setup-hl"')  # empty or [SETUP REQUIRED]: the way in
              if not recs or data["welcome"] else SETUP_BTN)
-    Path(path).write_text(_page("Engineer Paper Radar — Dashboard", "", _bar("📡 Engineer Paper Radar", extra=setup + _switcher(peers) + TAGS_BTN),
+    Path(path).write_text(_page("Engineer Paper Radar — Dashboard", "", _bar("📡 Engineer Paper Radar", extra=setup + _switcher(peers, rs=data["repo_sync"]) + TAGS_BTN),
                                 body, data, DASH_JS), encoding="utf-8")
     return len(recs)
 
@@ -1115,7 +1164,24 @@ def write_report_html(md_path, store, home, sync):
     return out
 
 
-def _switcher(pages, here=None, in_peers=False, primary=""):
+def repo_sync_info(store, cfg):
+    """v3.3.0: {configured, at, action, repos} for the SYNC menu: meta last_repo_sync (data_repo.stamp_sync)."""
+    import data_repo
+    dr = cfg.get("data_repo") or {}
+    try:
+        clone = (data_repo.repo_dir(cfg) / ".git").exists()
+    except Exception:
+        clone = False
+    m = store.meta("last_repo_sync") or {}
+    return {"configured": bool(dr.get("remote_url") or dr.get("read_repos") or clone), "at": m.get("at") or "",
+            "action": m.get("action") or "", "repos": m.get("repos") or []}
+
+
+def _when(iso):
+    return html.escape(str(iso or "")[:16].replace("T", " "))
+
+
+def _switcher(pages, here=None, in_peers=False, primary="", rs=None):
     """v3.0.4: the header's 📚 Switch Radar / Repo ▾ menu: every dashboard, grouped by the private repo it comes
     from (My Primary Repo: 📡 My Radar + that repo's peers · repos merged into my corpus · external isolated
     repos), each with its field's icon. `here`: the page being written (marked); in_peers: a Peers/ page."""
@@ -1128,21 +1194,26 @@ def _switcher(pages, here=None, in_peers=False, primary=""):
     for p in pages:
         groups.setdefault((p["group"], p["repo"]), []).append(p)
     prim = next((r for g, r in groups if g == "primary"), pages[0].get("primary") or "")
-    out = [f'<div class="mhead">My Primary Repo{f" ({html.escape(prim)})" if prim else ""}</div>',
+    heads = {x.get("label"): x.get("head") for x in (rs or {}).get("repos") or []}
+    synced = (f' <span class="mt">· synced {_when(rs["at"])}</span>' if (rs or {}).get("at") else "")
+    out = [f'<div class="mhead">My Primary Repo{f" ({html.escape(prim)})" if prim else ""}{synced}</div>',
            link(main, "📡 My Radar", "your own dashboard", here is None)]
     rank = {"primary": 0, "merged": 1, "isolated": 2}
     for g, repo in sorted(groups, key=lambda k: (rank[k[0]], k[1].lower())):
+        last = f' <span class="mt">· newest commit {_when(heads[repo])}</span>' if heads.get(repo) else ""
         if g == "merged":
-            out.append(f'<div class="mhead">{html.escape(repo)} · merged into my corpus</div>')
+            out.append(f'<div class="mhead">{html.escape(repo)} · merged into my corpus{last}</div>')
         elif g == "isolated":
-            out.append(f'<div class="mhead">External repo: {html.escape(repo)}</div>')
+            out.append(f'<div class="mhead">External repo: {html.escape(repo)}{last}</div>')
         for p in groups[(g, repo)]:
             icon = presets.PRESETS[p["preset"]]["icon"] if p["preset"] in presets.PRESETS else "👥"
             fld = presets.short(p["preset"]) or "field unknown"
             tail = (f"{html.escape(repo)} · Isolated · {'Similar' if p['kind'] == 'similar' else 'Different'}"
                     if g == "isolated" else html.escape(fld))
+            upd = (p.get("info") or {}).get("updated")
             out.append(link(p["file"] if in_peers else f"Peers/{p['file']}",
-                            f"{icon} {html.escape(p['title'])} ({tail})",
+                            f"{icon} {html.escape(p['title'])} ({tail})"
+                            + (f' <span class="mt">· updated {_when(upd)}</span>' if upd else ""),
                             f"{p['title']}: {len(p['recs'])} papers, read-only", here == p["file"]))
     return ('<details class="peers"><summary class="btn">📚 Switch Radar / Repo ▾</summary><div class="menu">'
             + "".join(out) + "</div></details>")
@@ -1222,6 +1293,7 @@ def write_peer_dashboards(store, cfg, log=print):
         used.add(f)
         p["file"] = f
     gen = datetime.now().strftime("%Y-%m-%d %H:%M")
+    rs = repo_sync_info(store, cfg)
     for p in pages:
         peer, recs, pcfg, pk, info, title = p["peer"], p["recs"], p["pcfg"], p["preset"], p["info"], p["title"]
         names = info.get("pillars") or [f"Pillar {k}" for k in range(1, max(r["pillar"] for r in recs) + 1)]
@@ -1231,13 +1303,15 @@ def write_peer_dashboards(store, cfg, log=print):
                 "pillars": [{"k": f"p{i}", "n": i, "short": catalog.pillar_short(i, name, own=False), "name": name}
                             for i, name in enumerate(names, 1)],
                 "sync": {"hosts": [], "port": 0, "token": "", "timeout": 0},  # no token: this page can't write
+                "repo_sync": rs,
                 "badge": presets.badge(pcfg)}
         icon = presets.PRESETS[pk]["icon"] if pk in presets.PRESETS else "👤"
         field = (f" · {icon} {html.escape(presets.PRESETS[pk]['label'])}"
                  if pk in presets.PRESETS and presets.key(pcfg) != presets.key(cfg) else "")
         where = {"isolated": f" · from <b>{html.escape(p['repo'])}</b> (🔒 isolated: none of these papers are in your store)",
                  "merged": f" · from <b>{html.escape(p['repo'])}</b> (merged into your corpus)"}.get(p["group"], "")
-        upd = f" · updated {html.escape(str(info['updated'])[:16].replace('T', ' '))}" if info.get("updated") else ""
+        upd = (f" · their radar updated <b>{_when(info['updated'])}</b>" if info.get("updated") else "") \
+            + (f" · you last pulled {_when(rs['at'])}" if rs.get("at") else "")
         body = (f'<div class="peerbanner">{icon} Viewing <b>{html.escape(title)}</b> (Read-Only){field}{where}{upd} · '
                 f'<a href="../DASHBOARD.html">← Back to My Radar</a></div>'
                 + _dash_body(gen, '<a href="../DASHBOARD.html">My Radar</a>',
@@ -1246,7 +1320,7 @@ def write_peer_dashboards(store, cfg, log=print):
         d.mkdir(parents=True, exist_ok=True)
         (d / p["file"]).write_text(
             _page(f"Engineer Paper Radar — {title}", "", _bar(f"{icon} {title}", "../DASHBOARD.html",
-                                                _switcher(pages, p["file"], True) + TAGS_BTN, readonly=True,
+                                                _switcher(pages, p["file"], True, rs=rs) + TAGS_BTN, readonly=True,
                                                 home_label="← Back to My Radar"),
                   body, data, DASH_JS), encoding="utf-8")
     for f in d.glob("DASHBOARD_*.html") if d.exists() else []:

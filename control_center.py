@@ -16,6 +16,8 @@ API (JSON):
   POST /api/config        ← {"config": {...}}: validated, then only the changed keys are written into config.json
                             (unknown keys and the file's own layout are kept; the previous file goes to
                             _system/config.backup.json)
+  POST /api/verify_venue  ← {"catalog": short} | {"query", "type", "short", "regex"} | {"suggest": name}: a venue
+                            checked live against Crossref + OpenAlex (venues.verify) for the confirmation modal
   POST /api/run           ← {"action": "rescore_and_seed" | "pull_data_repo" | "sync_data_repo" | "daily",
                              "config"?: {...}, "clone_url"?, "clone_dir"?}: saves the config, then runs briefing.py
                             in a background worker (one job at a time)
@@ -76,7 +78,8 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "vip_boost": ["vip_boost"], "anchors": ["anchors"], "contact_email": ["contact_email"],
          "data_repo_dir": ["paths", "data_repo_dir"], "domain_preset": ["domain_preset"], "deployment": ["deployment"],
          "sync_hosts": ["sync_server", "hosts"], "schedule": ["schedule"], "topic": ["topic"],
-         "catch_up_since": ["catch_up", "since"]}
+         "catch_up_since": ["catch_up", "since"], "venues": ["venues"],  # v3.3.0: Step 1 → 📚 Watched Venues
+         "flagship_venues": ["catch_up", "flagship_venues"]}
 TOPIC_KEYS = {"min_year": (0, 2100), "recent_from_year": (1950, 2100), "n_classic": (1, 20), "n_recent": (1, 20)}  # v3.2.3
 DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
 # v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
@@ -222,7 +225,9 @@ def editable(cfg):
            "domain_preset": presets.key(cfg), "deployment": deployment(cfg),
            "sync_hosts": list((cfg.get("sync_server") or {}).get("hosts") or []),
            "schedule": schedule_cfg(cfg),
-           "topic": topic_cfg(cfg), "catch_up_since": str((cfg.get("catch_up") or {}).get("since") or "2025-01-01")}
+           "topic": topic_cfg(cfg), "catch_up_since": str((cfg.get("catch_up") or {}).get("since") or "2025-01-01"),
+           "venues": json.loads(json.dumps([v for v in cfg.get("venues") or [] if isinstance(v, dict)])),
+           "flagship_venues": list((cfg.get("catch_up") or {}).get("flagship_venues") or [])}
     if STARTER:
         out["arxiv"] = {k: ax.get(k, False if k in ("enabled", "share") else []) for k in ARXIV_KEYS}
     return out
@@ -462,6 +467,13 @@ def validate(upd, cfg):
                     put(["arxiv", kk], groups)
                 else:
                     errs.append(f"arxiv.{kk}: not editable here")
+        elif k == "venues":  # v3.3.0: the whole list, every entry through venues.check_venue (regex guard included)
+            import venues as venue_rules
+            put(PATHS[k], lambda v=v: venue_rules.check_venues(v, cfg.get("venues")))
+        elif k == "flagship_venues":
+            import venues as venue_rules
+            vlist = upd["venues"] if isinstance(upd.get("venues"), list) else cfg.get("venues")
+            put(PATHS[k], lambda v=v, vlist=vlist: venue_rules.check_flagships(v, vlist))
         elif k == "domain_preset":
             import presets
             put(PATHS[k], lambda v=v: v if v in presets.PRESETS else _fail(
@@ -485,6 +497,11 @@ def validate(upd, cfg):
             put(PATHS[k], hosts)
         else:
             errs.append(f"{k}: not an editable setting")
+    if isinstance(upd.get("venues"), list) and "flagship_venues" not in upd:  # a removed venue is no flagship
+        shorts = {x.get("short") for x in upd["venues"] if isinstance(x, dict)}
+        fl = list((cfg.get("catch_up") or {}).get("flagship_venues") or [])
+        if any(f not in shorts for f in fl):
+            out.append((PATHS["flagship_venues"], [f for f in fl if f in shorts]))
     if errs:
         raise ValueError("; ".join(errs))
     return out
@@ -548,6 +565,34 @@ def _members(text, start):
         if text[i] != "}":
             raise ValueError("config.json: unexpected layout")
         return out, i
+
+
+def _items(text, start):
+    """The values of the JSON array whose '[' is at `start`: [(value, value_start, value_end)]."""
+    dec, out = json.JSONDecoder(), []
+    i = _WS.match(text, start + 1).end()
+    if text[i] == "]":
+        return out
+    while True:
+        s0 = i
+        val, i = dec.raw_decode(text, i)
+        out.append((val, s0, i))
+        i = _WS.match(text, i).end()
+        if text[i] != ",":
+            return out
+        i = _WS.match(text, i + 1).end()
+
+
+def _fmt_items(text, vs, value, indent):
+    """v3.3.0: a list of objects (venues) with every item that didn't change kept exactly as it was written, so a
+    hand-aligned layout survives adding or removing one venue; new items go on one line each."""
+    old = _items(text, vs)
+    keep = {}
+    for val, s0, e in old:
+        keep.setdefault(json.dumps(val, ensure_ascii=False), text[s0:e])
+    inner = " " * _col(text, old[0][1]) if old and text.rfind("\n", 0, old[0][1]) > vs else indent + "  "
+    parts = [keep.get(json.dumps(x, ensure_ascii=False)) or json.dumps(x, ensure_ascii=False) for x in value]
+    return "[\n" + ",\n".join(inner + x for x in parts) + "\n" + indent + "]"
 
 
 def _col(text, pos):
@@ -654,6 +699,8 @@ def patch_text(text, path, value):
             indent = " " * _col(text, ks)
             if isinstance(value, dict) and value and text[vs] == "{" and any(MARKER_RX.match(k) for k in value):
                 return text[:vs] + _fmt_paragraphs(text, vs, value, indent) + text[ve:]
+            if isinstance(value, list) and value and all(isinstance(x, dict) for x in value) and text[vs] == "[":
+                return text[:vs] + _fmt_items(text, vs, value, indent) + text[ve:]
             return text[:vs] + _fmt(value, indent, _col(text, vs)) + text[ve:]
         if text[vs] != "{":
             raise ValueError(f"config.json: {'.'.join(path[:depth + 1])} is not an object")
@@ -670,6 +717,10 @@ def write_config(changes, cfg=None):
     todo = [(p, v) for p, v in changes if not _same(_get(raw, p), v)]
     if not todo:
         return []
+    for p, v in todo:  # v3.3.0: a venue list is checked again here, whoever asked for the write
+        if p == ["venues"]:
+            import venues as venue_rules
+            venue_rules.check_venues(v, raw.get("venues"))
     crlf = "\r\n" in text
     style = _dump_style(raw, text)
     if style:
@@ -1233,6 +1284,13 @@ def api_post(path, req, jobs):
         if path == "/api/plan_keywords":  # v3.0.5: 🪄 the 0-token keyword & weight planner (read only)
             import keyword_planner
             return keyword_planner.api(load_cfg(), req)
+        if path == "/api/verify_venue":  # v3.3.0: Step 1 → 📚 Watched Venues (Crossref + OpenAlex, read only)
+            import venues as venue_rules
+            cfg = load_cfg()
+            try:
+                return 200, venue_rules.verify(req, cfg, cfg.get("venues"))
+            except RuntimeError as e:
+                return 502, {"ok": False, "error": f"{e}: try again in a minute"}
         if path == "/api/config":
             cfg, changed = _save(req)
             return 200, {"ok": True, "changed": changed, "editable": editable(cfg), "status": status(cfg),
@@ -1663,12 +1721,14 @@ def _preset_changes(cfg):
 def page_data(cfg):
     import curation
     import presets
+    import venues as venue_rules
     sync = curation.page_sync_config(cfg)
     return {"edition": "starter" if STARTER else "radar", "editable": editable(cfg), "status": status(cfg),
             "raw": raw_config(), "paths": PATHS, "here": str(HERE), "gui_port": GUI_PORT, "data_url": DATA_URL,
             "commands": commands(cfg), "actions": ACTIONS, "max_pillars": MAX_PILLARS, "fixed_pillars": fixed_pillars(),
             "presets": presets.summary(), "preset_changes": _preset_changes(cfg),
             "sync": sync if sync.get("hosts") else {}, "name": NAME, "report_day": cfg.get("report_day") or "Friday",
+            "venue_catalog": venue_rules.catalog(),
             "venues": [{"short": v.get("short") or v.get("name") or "?", "name": v.get("name") or "",
                         "source": v.get("source") or ""} for v in cfg.get("venues") or [] if isinstance(v, dict)]}
 
@@ -1690,7 +1750,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.2.3</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.3.0</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -1702,7 +1762,7 @@ def render(data):
 <button class="btn small" id="toggleall" onclick="toggleAll()">⊞ Expand All</button></div>
 <details class="step-card" id="s1"><summary><span class="snum">1</span><span class="stitle">Step 1 · Basic Profile &amp; Discipline Preset <em>(Required)</em></span>
 <span class="sbadge" id="s1b"></span><span class="sarrow">▸</span><span class="ssum" id="s1s"></span></summary>
-<div class="sbody"><section id="c-profile"></section><section id="c-preset"></section></div></details>
+<div class="sbody"><section id="c-profile"></section><section id="c-preset"></section><section id="c-venues"></section></div></details>
 <details class="step-card" id="s2"><summary><span class="snum">2</span><span class="stitle">Step 2 · Private Shared Repo &amp; Team Sync <em>(Recommended for Teams)</em></span>
 <span class="sbadge" id="s2b"></span><span class="sarrow">▸</span><span class="ssum" id="s2s"></span></summary>
 <div class="sbody"><section id="c-repo"></section><section id="c-schedule"></section></div></details>
@@ -1728,6 +1788,16 @@ stored here: only whether they are set.</p>
 
 
 CSS = r"""
+.vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin:10px 0}
+.vcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-width:0}
+.vcard.flag{border-color:var(--cite);box-shadow:inset 3px 0 0 var(--cite)}.vtop{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
+.vshort{font-size:16px}.vb{font-size:12px;border:1px solid var(--line);border-radius:6px;padding:0 6px;color:var(--muted);overflow-wrap:anywhere;max-width:100%}
+.vb code{font-size:11px;margin-left:4px;white-space:normal;overflow-wrap:anywhere}.vname{color:var(--muted);overflow-wrap:anywhere}
+.vact{display:flex;gap:6px;margin-top:auto;flex-wrap:wrap}.btn.vflag.on{background:var(--citebg);border-color:var(--cite);color:var(--fg);font-weight:600}
+.vadd{border-top:1px dashed var(--line);margin-top:10px;padding-top:4px}.vcustom{display:flex;flex-direction:column;gap:6px;margin-top:12px;max-width:780px}
+.vlist{margin:4px 0 8px;padding-left:20px}.vlist li{margin:3px 0;overflow-wrap:anywhere}.vlist.ok li::marker{color:var(--ok)}.vlist.exc li{color:var(--muted)}
+.verr p{color:var(--warn);font-weight:600;margin:4px 0}.vwarn p{margin:3px 0}.vconf{margin-top:12px;gap:16px}
+.vcatg h3{margin:10px 0 4px}.btn.vpick.on{opacity:.55}
 main.cc{max-width:1180px}.cc .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
 .cc h2{font-size:16px;margin:0 0 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.cc h3{font-size:14px;margin:14px 0 6px}
 .muted{color:var(--muted)}.ok{color:var(--ok)}.warn{color:var(--warn)}.small{font-size:12.5px}.foot{font-size:12.5px;text-align:center}
@@ -1937,7 +2007,7 @@ function collect() {
              key1_themes: S.key1_themes, min_score: S.min_score, vip_authors: S.vip_authors, vip_boost: S.vip_boost,
              anchors: S.anchors, contact_email: S.contact_email, data_repo: dataRepoOut(), data_repo_dir: S.data_repo_dir,
              domain_preset: S.domain_preset, deployment: S.deployment, sync_hosts: S.sync_hosts, schedule: S.schedule,
-             topic: S.topic, catch_up_since: S.catch_up_since};
+             topic: S.topic, catch_up_since: S.catch_up_since, venues: S.venues, flagship_venues: S.flagship_venues};
   u.pillars = KW.pillars.map(p => p.name.trim());  // v3.0.7: both editions (P1–P4 fixed on the Minisforum radar)
   const sh = KW.pillars.map(p => (p.short || '').trim());
   while (sh.length && !sh[sh.length - 1]) sh.pop();
@@ -2053,12 +2123,13 @@ function renderProfile() {
       h('span', {class: 'muted small'}, 'then pick your discipline below (Apply saves it right away)')));
 }
 function renderAdvanced() {
-  const env = ST.env, V = D.venues || [];
+  const env = ST.env, V = S.venues || [];
   fill($('#c-advanced'), h('h2', {}, '📚 Venues, Schedule & Optional API Keys'),
     h('h3', {}, `Venues (${V.length})`),
-    V.length ? h('div', {class: 'chips'}, V.map(v => h('span', {class: 'chip', title: v.name + (v.source ? ' · source: ' + v.source : '')}, h('span', {class: 't'}, '☑ ' + v.short))))
+    V.length ? h('div', {class: 'chips'}, V.map(v => h('span', {class: 'chip', title: v.name + (v.source ? ' · source: ' + v.source : '')}, h('span', {class: 't'}, (isFlag(v.short) ? '⭐ ' : '☑ ') + v.short))))
       : h('p', {class: 'muted small'}, 'No venues configured.'),
-    h('p', {class: 'muted small'}, 'A 🧭 domain preset (Step 1) can replace this list; for single venues edit "venues" in config.json.'),
+    h('p', {class: 'muted small'}, h('a', {href: '#c-venues', onclick: e => { e.preventDefault(); openTo('#c-venues'); }}, '✏️ Manage venues in Step 1 → 📚 Watched Venues'),
+      ' (Quick-Pick Catalog, custom ISSN / name lookup, ⭐ flagship, ✕ remove). A 🧭 domain preset can also replace the whole list.'),
     h('h3', {}, '🗓️ Schedule'),
     h('p', {class: 'small'}, `Weekly report day: ${D.report_day || 'Friday'}. `, 'Friday times: ⏰ Friday Schedule in Step 2.'),
     h('h3', {}, '🔑 Optional boosters'),
@@ -2072,11 +2143,11 @@ function stepInfo() {
   const env = ST.env, dr = ST.data_repo, p = ST.pillars, T = ST.topics || {dives: []}, rr = (dr.read_repos || []).length;
   const pr = (D.presets || []).find(x => x.key === S.domain_preset);
   return [
-    {id: 's1', req: true, done: !!env.contact_email_set, sum: `${pr ? pr.icon + ' ' + pr.label : 'no preset'} · ✉️ ${env.contact_email_set ? 'e-mail set' : 'e-mail missing'}`},
+    {id: 's1', req: true, done: !!env.contact_email_set, sum: `${pr ? pr.icon + ' ' + pr.label : 'no preset'} · 📚 ${(S.venues || []).length} venues · ✉️ ${env.contact_email_set ? 'e-mail set' : 'e-mail missing'}`},
     {id: 's2', req: false, done: !!dr.connected || rr > 0, sum: dr.connected ? `🟢 ${repoName(dr.remote_url) || 'data repo'} · ${dr.peers.length} peer(s)` + (rr ? ` · ${rr} shared repo(s) to read` : '')
       : (rr ? `📚 ${rr} shared repo(s) to read · no primary repo` : '⚪ Not connected: solo use works fine')},
     {id: 's3', req: true, done: !!p.ready, sum: p.ready ? `${p.count} pillars · ${fmt(p.keywords)} weighted keywords · ${S.anchors.length} anchors · ${S.vip_authors.length} VIP authors` : 'name your pillars and plan their keywords'},
-    {id: 's4', req: false, opt: true, done: false, sum: `🔎 ${T.dives.length} topic dive(s) · 📚 ${(D.venues || []).length} venues · ${S.deployment === 'mesh_lan' ? '🌐 Mesh LAN' : '💻 Single PC'}`}];
+    {id: 's4', req: false, opt: true, done: false, sum: `🔎 ${T.dives.length} topic dive(s) · 📚 ${(S.venues || []).length} venues · ${S.deployment === 'mesh_lan' ? '🌐 Mesh LAN' : '💻 Single PC'}`}];
 }
 function renderSteps() {
   const fresh = !(ST.store.papers > 0) && !ST.pillars.ready;
@@ -2875,7 +2946,11 @@ async function applyPreset(k) {
   }
   const c = D.preset_changes[k];
   PRESET_PENDING = rv && c.venues ? c.venues : c.base;
-  S.domain_preset = k; renderPreset(); changed();
+  for (const [path, v] of PRESET_PENDING) {  // v3.3.0: the staged venue list shows in Step 1 right away
+    if (path.join('.') === 'venues') S.venues = clone(v);
+    if (path.join('.') === 'catch_up.flagship_venues') S.flagship_venues = clone(v);
+  }
+  S.domain_preset = k; renderPreset(); renderVenues(); changed();
   toast('Preset staged: 💾 Save config.json writes it.', 5000);
 }
 function renderPreset() {
@@ -2885,6 +2960,169 @@ function renderPreset() {
       h('span', {class: 'small'}, `${pr.badge.si_icon} ${pr.badge.si} · ${pr.badge.sim_icon} ${pr.badge.sim}`),
       S.domain_preset === pr.key ? h('span', {class: 'tag'}, 'active') : h('button', {class: 'btn small', onclick: () => applyPreset(pr.key)}, 'Apply')))),
     howBox('A venue with "source": "pubmed" (NCBI E-utilities; "query" = a PubMed term, empty = your strongest keywords) or "biorxiv" / "medrxiv" (api.biorxiv.org; optional "categories") is fetched by those adapters; other venues by Crossref (ISSN) and the IEEE API.'));
+}
+
+// ---------- v3.3.0: Step 1 · 📚 Watched Venues (catalog, custom lookup, live check + confirmation) ----------
+const VCAT = D.venue_catalog || {groups: [], venues: []};
+const SRC_LABEL = {pubmed: '🧬 PubMed', biorxiv: '🧪 bioRxiv', medrxiv: '🩺 medRxiv'};
+let VREQ = null;
+function isFlag(s) { return (S.flagship_venues || []).includes(s); }
+function vBadge(v) {
+  if (v.source) return h('span', {class: 'vb'}, SRC_LABEL[v.source] || v.source);
+  if (v.type === 'conference') return h('span', {class: 'vb', title: 'container_regex: the proceedings title must match it'}, '🎤 Conf', v.container_regex ? h('code', {}, v.container_regex) : null);
+  return h('span', {class: 'vb'}, '📖 Journal', (v.issn || []).length ? ' · ISSN ' + v.issn.join(' / ') : '');
+}
+function watched(v) {  // the watched venue with the same short code (or, for a journal, a shared ISSN)
+  const iss = new Set(v.issn || []);
+  return (S.venues || []).find(x => x.short.toLowerCase() === v.short.toLowerCase() || (v.type === 'journal' && (x.issn || []).some(i => iss.has(i))));
+}
+async function venuesChanged(msg, undo) {  // saves only venues + catch_up.flagship_venues; other edits stay unsaved
+  renderVenues(); renderAdvanced(); renderSteps(); changed();
+  if (!API) return toast(msg + ' · 💾 Save Config writes config.json', 6000);
+  let r; try { r = await call('POST', '/api/config', {config: {venues: S.venues, flagship_venues: S.flagship_venues}}); } catch (e) { r = {ok: false, error: String(e)}; }
+  if (!r.ok) { alert('Not saved: ' + r.error); if (undo) undo(); }
+  else {
+    S.venues = r.editable.venues; S.flagship_venues = r.editable.flagship_venues; ST = r.status;
+    try { const bl = JSON.parse(baseline); bl.venues = S.venues; bl.flagship_venues = S.flagship_venues; baseline = JSON.stringify(bl); } catch (e) {}
+    toast(r.changed.length ? msg + ' (saved: ' + r.changed.join(', ') + ')' : 'No change to save', 5000);
+  }
+  renderVenues(); renderAdvanced(); renderSteps(); changed();
+}
+function toggleFlag(s) {
+  const before = clone(S.flagship_venues || []), on = !before.includes(s);
+  S.flagship_venues = on ? [...before, s] : before.filter(x => x !== s);
+  venuesChanged(on ? `⭐ ${s} is a flagship venue: its papers rank higher in the weekly catch-up` : `${s} is no longer a flagship venue`,
+    () => { S.flagship_venues = before; });
+}
+function removeVenue(i) {
+  const v = S.venues[i];
+  if (S.venues.length <= 1) return alert('Keep at least one venue.');
+  if (!confirm(`Stop watching ${v.short} (${v.name})?\n\nThe next runs no longer fetch or backfill it. Papers already in your store stay, with their marks and notes.`)) return;
+  const bv = clone(S.venues), bf = clone(S.flagship_venues || []);
+  S.venues.splice(i, 1); S.flagship_venues = bf.filter(x => x !== v.short);
+  venuesChanged(`${v.short} is no longer watched (its papers stay in your store)`, () => { S.venues = bv; S.flagship_venues = bf; });
+}
+function addVenue(v, flag) {
+  const w = watched(v);
+  if (w) return alert(`${w.short} is already watched (same short code or ISSN): pick another short code.`);
+  const bv = clone(S.venues || []), bf = clone(S.flagship_venues || []);
+  S.venues = [...bv, v]; if (flag) S.flagship_venues = [...bf, v.short];
+  $('#modal').hidden = true;
+  venuesChanged(`${v.short} added: the next ▶ Run fetches it`, () => { S.venues = bv; S.flagship_venues = bf; });
+}
+function renderVenues() {
+  const el = $('#c-venues'); if (!el) return;
+  const V = S.venues || [], nf = V.filter(v => isFlag(v.short)).length;
+  const q = ta({class: 'in', placeholder: 'ISSN (e.g. 0018-9480), a journal title, or a conference name…', 'aria-label': 'venue to look up'}, {single: ' ', enter: () => lookup()});
+  const typ = h('select', {class: 'in', 'aria-label': 'venue type'}, h('option', {value: 'auto'}, 'Auto-detect'),
+    h('option', {value: 'journal'}, '📖 Journal'), h('option', {value: 'conference'}, '🎤 Conference'));
+  const short = h('input', {class: 'in w6', placeholder: 'code (optional)', maxlength: 20, 'aria-label': 'short code'});
+  const rx = ta({class: 'in mono', placeholder: 'container_regex (conferences, optional): 🪄 Suggest writes one from the name', 'aria-label': 'container regex'}, {single: ''});
+  const lookup = () => verifyVenue({query: q.value.trim(), type: typ.value, short: short.value.trim(), regex: rx.value.trim()});
+  const suggest = async () => {
+    const n = q.value.trim(); if (!n) return alert('Type the conference name first.');
+    if (!API) return alert('🪄 Suggest needs the Control Center server.');
+    const r = await call('POST', '/api/verify_venue', {suggest: n});
+    if (!r.ok) return alert(r.error || 'No suggestion');
+    rx.value = r.regex; typ.value = 'conference'; grow(rx);
+  };
+  fill(el, h('h2', {}, '📚 Watched Venues (Journals & Conferences)', h('span', {class: 'muted small'}, `${V.length} venues · ⭐ ${nf} flagship`)),
+    howBox('The radar fetches new papers (and, with an IEEE key, backfills older ones) from these venues: journals by ISSN (Crossref, IEEE API), conferences by their proceedings title, kept only when the title matches the venue\'s container_regex. ⭐ Flagship venues rank higher in the weekly ⏪ catch-up (catch_up.flagship_venues). ✕ Remove stops future fetching only: papers already in your store stay. Before a venue is added it is checked live against Crossref and OpenAlex (no API key) and you confirm what was found. A pattern that is too broad (.*, IEEE, a year, one generic word) or can hang the radar ((a+)+) is refused.'),
+    V.length ? h('div', {class: 'vgrid'}, V.map((v, i) => h('div', {class: 'vcard' + (isFlag(v.short) ? ' flag' : '')},
+      h('div', {class: 'vtop'}, h('b', {class: 'vshort'}, v.short), vBadge(v)),
+      h('div', {class: 'small vname'}, v.name || ''),
+      h('div', {class: 'vact'},
+        v.source ? null : h('button', {class: 'btn small vflag' + (isFlag(v.short) ? ' on' : ''), title: 'Flagship: its papers rank higher in the weekly catch-up', onclick: () => toggleFlag(v.short)}, isFlag(v.short) ? '⭐ Flagship' : '☆ Flagship'),
+        h('button', {class: 'btn small', title: 'Stop watching (papers in your store stay)', onclick: () => removeVenue(i)}, '✕ Remove')))))
+      : h('p', {class: 'warn small'}, 'No venues: add one below.'),
+    h('div', {class: 'vadd'}, h('h3', {}, '➕ Add a venue'),
+      h('div', {class: 'row'}, h('button', {class: 'btn primary', onclick: catalogModal}, '📋 Quick-Pick Catalog'),
+        h('span', {class: 'muted small'}, `${VCAT.venues.length} common IC / ECE venues (RF, power, EDA, devices, sensors…) with checked ISSNs and strict title patterns`)),
+      h('div', {class: 'vcustom'}, h('div', {class: 'small muted'}, '🔍 Custom venue: an ISSN, a journal title or a conference name'), q,
+        h('div', {class: 'row'}, typ, short, h('button', {class: 'btn', onclick: suggest, title: 'Write a container_regex from the conference name'}, '🪄 Suggest regex')),
+        rx, h('div', {class: 'row'}, h('button', {class: 'btn primary', onclick: lookup}, '🔍 Look Up & Verify'),
+          h('span', {class: 'muted small'}, API ? 'asks Crossref + OpenAlex (5–30 s), then shows what it found' : 'the live check needs the Control Center server')))));
+}
+function catalogModal() {
+  const body = h('div', {class: 'planbody'}, VCAT.groups.map(g => h('div', {class: 'vcatg'}, h('h3', {}, g.label),
+    h('div', {class: 'chips'}, VCAT.venues.filter(c => c.group === g.key).map(c => {
+      const v = c.venue, w = watched(v);
+      return h('button', {class: 'btn small vpick' + (w ? ' on' : ''), disabled: !!w,
+        title: v.name + (v.issn.length ? ' · ISSN ' + v.issn.join(' / ') : '') + (v.container_regex ? ' · regex ' + v.container_regex : '') + (w ? ' (already watched)' : ''),
+        onclick: () => verifyVenue({catalog: v.short})}, (w ? '✓ ' : v.type === 'conference' ? '🎤 ' : '📖 ') + v.short);
+    })))));
+  modal('📋 Quick-Pick Venue Catalog', h('div', {}, h('p', {class: 'small muted'}, 'Pick a venue: it is checked live (Crossref + OpenAlex) and you confirm before it joins your list. Hover a venue for its full title. ✓ = already watched.'), body),
+    [h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Close')]);
+  const mb = $('#modal .mbox'); if (mb) mb.classList.add('wide');
+}
+async function verifyVenue(req) {
+  if (!API) {
+    if (!req.catalog) return alert('The live venue check needs the Control Center server: Start_Radar_GUI / python briefing.py --gui (or open this page from the radar\'s sync server).');
+    const c = VCAT.venues.find(x => x.venue.short === req.catalog);
+    return showVerify({ok: true, kind: c.venue.type, title: c.venue.name, venue: clone(c.venue), offline: true, catalog: true, regex: c.venue.container_regex,
+      warnings: ['Static page: the live Crossref / OpenAlex check is skipped (catalog entries were checked when the catalog was built)'], errors: []}, req);
+  }
+  if (!req.catalog && !req.query) return alert('Type an ISSN, a journal title or a conference name.');
+  const id = VREQ = {};
+  modal('⏳ Checking the venue…', h('p', {}, 'Asking Crossref and OpenAlex (no API key). This takes 5–30 seconds.'),
+    [h('button', {class: 'btn', onclick: () => { VREQ = null; $('#modal').hidden = true; }}, 'Cancel')]);
+  let r; try { r = await call('POST', '/api/verify_venue', req); } catch (e) { r = {ok: false, error: String(e)}; }
+  if (VREQ !== id) return;  // cancelled, or a newer check started
+  showVerify(r, req);
+}
+function paperList(ps, cls) {
+  return h('ul', {class: 'vlist' + (cls ? ' ' + cls : '')}, ps.map(p => h('li', {}, h('span', {class: 'muted small'}, (p.date || '') + ' '),
+    p.doi ? h('a', {href: 'https://doi.org/' + p.doi, target: '_blank', rel: 'noopener'}, p.title) : p.title,
+    p.container && cls === 'samples' ? h('div', {class: 'muted small'}, p.container) : null)));
+}
+function titleList(ms, cls) {
+  return h('ul', {class: 'vlist ' + cls}, ms.map(m => h('li', {}, m.title, h('span', {class: 'muted small'},
+    ` · ${fmt(m.n)} ${m.source === 'Crossref' ? 'papers' : 'works (' + m.source + ')'}${m.years && m.years.length ? ' · ' + m.years.join(', ') : ''}`))));
+}
+function showVerify(r, req) {
+  const cancel = h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Cancel');
+  if (!r.ok) return modal('⚠️ Venue not verified', h('p', {class: 'warn'}, r.error || 'unknown error'), [cancel]);
+  const v = r.venue, conf = r.kind === 'conference', kids = [];
+  const short = h('input', {class: 'in w6', value: v.short, maxlength: 20, 'aria-label': 'short code'});
+  const flag = h('input', {type: 'checkbox'});
+  if ((r.errors || []).length) kids.push(h('div', {class: 'verr'}, r.errors.map(e => h('p', {}, '⛔ ' + e))));
+  if ((r.warnings || []).length) kids.push(h('div', {class: 'vwarn'}, r.warnings.map(w => h('p', {class: 'small'}, '⚠️ ' + w))));
+  let rx = null;
+  if (!conf) {
+    kids.push(h('div', {class: 'kv'}, h('b', {}, 'Official title'), h('span', {}, r.title || v.name),
+      h('b', {}, 'Publisher'), h('span', {}, r.publisher || v.publisher || '–'),
+      h('b', {}, 'ISSN'), h('span', {}, r.offline ? (v.issn || []).join(' / ') : `print ${r.issn_print || '–'} · electronic ${r.issn_online || '–'}`),
+      h('b', {}, 'OpenAlex works'), h('span', {}, r.works_count == null ? '–' : fmt(r.works_count))));
+    if ((r.recent || []).length) kids.push(h('h3', {}, '🆕 Recent papers with this ISSN'), paperList(r.recent));
+    if ((r.alternates || []).length) kids.push(h('h3', {}, 'Not this one? Other matches'), h('div', {class: 'chips'}, r.alternates.map(a =>
+      h('button', {class: 'btn small', title: `${a.publisher || ''} · ${fmt(a.works_count)} works`, onclick: () => verifyVenue({query: a.issn_l, type: 'journal'})}, `${a.name} (${a.issn_l})`))));
+  } else {
+    rx = ta({class: 'in mono', value: r.regex || v.container_regex || '', 'aria-label': 'container regex'}, {single: ''});
+    kids.push(h('div', {class: 'kv'}, h('b', {}, 'Conference'), h('span', {}, v.name),
+      h('b', {}, 'Checked'), h('span', {}, r.offline ? '– (static page)' : `${fmt(r.checked)} recent proceedings papers (Crossref) + OpenAlex sources`)),
+      h('div', {class: 'small muted'}, 'container_regex (case-insensitive; the proceedings title must match it)' + (r.suggested_regex ? ' · 🪄 suggested from the name' : '')),
+      rx, API ? h('div', {class: 'row'}, h('button', {class: 'btn small', onclick: () => verifyVenue(Object.assign({}, req, {regex: rx.value.trim()}))}, '🔁 Re-test this regex')) : null);
+    if (!r.offline) {
+      kids.push(h('h3', {}, `✅ Matched container titles (${r.matched.length})`),
+        r.matched.length ? titleList(r.matched, 'ok') : h('p', {class: 'warn small'}, 'None: the regex is too strict, or the name is off.'),
+        h('h3', {}, `🛡️ Excluded lookalikes (${r.excluded.length})`),
+        r.excluded.length ? titleList(r.excluded, 'exc') : h('p', {class: 'muted small'}, 'No lookalike titles came up.'));
+      if ((r.samples || []).length) kids.push(h('h3', {}, '🆕 Recent matching papers'), paperList(r.samples, 'samples'));
+    }
+  }
+  kids.push(h('div', {class: 'row vconf'}, h('label', {}, 'Short code ', short), h('label', {}, flag, ' ⭐ Flagship')));
+  const blocked = (r.errors || []).length || (conf && !r.offline && !(r.matched || []).length);
+  const ok = h('button', {class: 'btn primary', disabled: !!blocked, title: blocked ? 'Fix the problem above first' : 'Add it to the watched venues and save config.json', onclick: () => {
+    const nv = clone(v); nv.short = short.value.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 .&+\/_-]{0,19}$/.test(nv.short)) return alert('Short code: letters, digits, space . & + / _ - (at most 20).');
+    addVenue(nv, flag.checked);
+  }}, '✅ Confirm & Add Venue');
+  if (rx) rx.addEventListener('input', () => {  // an edited pattern must be re-tested before it is added
+    const edited = rx.value.trim() !== (r.regex || v.container_regex || '');
+    ok.disabled = !!blocked || (edited && !!API); ok.title = edited && API ? 'Re-test the edited regex first' : ok.title;
+  });
+  modal((conf ? '🎤 ' : '📖 ') + (r.catalog ? 'Catalog venue: ' : 'Is this the venue? ') + v.short, h('div', {class: 'planbody'}, kids), [cancel, ok]);
+  const mb = $('#modal .mbox'); if (mb) mb.classList.add('wide');
 }
 
 // ---------- v3.0: full-text search (FTS5, bm25) ----------
@@ -2928,7 +3166,7 @@ function citeModal() {
      h('button', {class: 'btn', onclick: () => { $('#modal').hidden = true; }}, 'Close')]);
 }
 
-function renderAll() { renderStatus(); renderProfile(); renderPreset(); renderRepo(); renderSchedule(); renderPlan(); renderThemes(); renderPeople(); renderTopic(); renderSearch(); renderAdvanced(); renderDeploy(); renderSteps(); lockRun(); }
+function renderAll() { renderStatus(); renderProfile(); renderPreset(); renderVenues(); renderRepo(); renderSchedule(); renderPlan(); renderThemes(); renderPeople(); renderTopic(); renderSearch(); renderAdvanced(); renderDeploy(); renderSteps(); lockRun(); }
 window.addEventListener('beforeunload', e => { if (isDirty()) { e.preventDefault(); e.returnValue = ''; } });
 
 // ---------- v3.2.0: update banners + ⏰ Friday schedule ----------
@@ -2995,12 +3233,12 @@ async function save() {
   const u = collect();
   if (STARTER && u.pillars.some(x => !x)) return alert('Every pillar needs a name.');
   if (API) {
-    let r; try { r = await call('POST', '/api/config', {config: u}); } catch (e) { return alert('The radar server did not answer: ' + e); }
-    if (!r.ok) return alert('Not saved: ' + r.error);
+    let r; try { r = await call('POST', '/api/config', {config: u}); } catch (e) { alert('The radar server did not answer: ' + e); return false; }
+    if (!r.ok) { alert('Not saved: ' + r.error); return false; }
     ST = r.status; S = r.editable; buildKW(); renderAll(); baseline = snapshot(); changed();
     toast(r.changed.length ? 'Saved config.json: ' + r.changed.join(', ') : 'No changes to save');
-    if (r.clone_needed) { toast('📦 Cloning your shared repo next to the radar folder…', 5000); return run('clone_data_repo'); }
-    return;
+    if (r.clone_needed) { toast('📦 Cloning your shared repo next to the radar folder…', 5000); run('clone_data_repo'); }
+    return true;
   }
   const raw = clone(D.raw);
   for (const [k, v] of Object.entries(u)) {
