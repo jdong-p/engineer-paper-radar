@@ -199,10 +199,22 @@ def marks_exports(cfg):
             if "applied" not in f.name and "live" not in f.name]
 
 
-def report_files(cfg):
+def topic_md_files(cfg, topics=None):
+    """v3.4.2: the Topic_Dives/*.md that belong to something: a dive in meta['topics'] (<date>_<slug>.md) or a
+    ⚡ recall (<date>_recall_<slug>.md). An orphan report (a deleted dive's) is never read, linked or rebuilt.
+    topics=None (a caller without a store): every .md."""
+    d = Path(cfg["paths"]["topic_dir"])
+    fs = list(d.glob("*.md")) if d.exists() else []
+    if topics is None:
+        return fs
+    keep = {f"{t.get('date')}_{s}" for s, t in topics.items()}
+    return [f for f in fs if f.stem in keep or "_recall_" in f.stem]
+
+
+def report_files(cfg, topics=None):
     root = Path(cfg["paths"]["onedrive_root"])
     files = [root / "MASTER_TABLE.md"] + list(Path(cfg["paths"]["weekly_dir"]).glob("*.md")) \
-        + list(Path(cfg["paths"]["topic_dir"]).glob("*.md"))
+        + topic_md_files(cfg, topics)
     return sorted((f for f in files if f.exists()), key=lambda f: f.stat().st_mtime)
 
 
@@ -210,7 +222,7 @@ def sync_markdown_marks(store, cfg, log=print, read_edits=True):
     """Apply checkbox edits from the reports to the store, then normalise all files. Returns #changes.
     read_edits=False only normalises: use it at the end of a run, when files may still show a state that a
     CLI flag (--cite/--uncite …) just changed and would otherwise be mistaken for a user edit."""
-    files = report_files(cfg)
+    files = report_files(cfg, store.meta("topics") or {})
     current, notes = all_marks(store), all_notes(store)
     wanted, wanted_notes = {}, {}
     exports = marks_exports(cfg) if read_edits else []

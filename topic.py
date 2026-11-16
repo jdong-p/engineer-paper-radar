@@ -133,12 +133,249 @@ def group_hits(groups, cfg):
     return out
 
 
+# ---------- v3.4.2: Short Title + Scope paragraph → a planned dive spec ----------
+# spec = {"title", "prompt", "core": [[term, synonym, …], …] (2–4 groups: a paper needs all but one),
+#         "boosters": [term, …] (soft +score), "exclude": [term, …] (NOT), "power_nw": float|None, "seeds": [doi, …]}
+BOOSTER_WORDS = {"power", "cmos", "bjt", "calibration", "calibrated", "trim", "trimming", "trimmed", "biased", "bias",
+                 "efficient", "efficiency", "accurate", "accuracy", "compact", "robust", "fast", "digital", "analog",
+                 "integrated", "chip", "on-chip", "process", "voltage", "supply", "area", "small", "wide", "range",
+                 "resolution", "precision", "novel", "architecture", "energy-efficient", "measured", "silicon"}
+ERA_SYNONYMS = {"temperature": ["PTAT", "CTAT", "bandgap"], "leakage": ["tunneling current"],
+                "subthreshold": ["weak inversion"], "harvesting": ["energy scavenging"]}
+EXCLUDE_RX = re.compile(r"\b(?:exclud(?:e|es|ing)|without|except|avoid(?:ing)?|not|no)\b[:\s]+([^.;\n]+)", re.I)
+CN_EXCLUDE_RX = re.compile(r"(?:不要|排除|除了|不包括|不含|去掉)\s*([A-Za-z0-9 ,/&-]+)")
+SCOPE_POWER_RX = re.compile(r"\b(?:below|under|less than|lower than|at most)\s*(\d+(?:\.\d+)?)\s?(pW|nW|µW|μW|uW)\b|[<≤]\s*(\d+(?:\.\d+)?)\s?(pW|nW|µW|μW|uW)\b", re.I)
+# words of a scope sentence that are never a concept of their own
+PROSE = set("""today now nowadays seed seeds below above under over from classic classics design designs modern recent
+sota state art older newer era eras paper papers work works want wanted look like also both any only especially including
+include includes such etc between across span spanning year years early late new old latest first foundational literature
+review survey plus well than less more good best very into onto their them this that these those which where what how why
+when who toward towards about around via per each other others its are was were been being have has had can could should
+would will may might must shall does did need needs find show see give get use used uses focus focusing mainly mostly
+interested interest topic topics related relevant include kind kinds type types way ways approach approaches
+especially particularly like e.g i.e""".split())
+DOI_RX = re.compile(r"\b10\.\d{4,9}/[^\s\"<>,;]+", re.I)
+TERM_RX = re.compile(r"^[A-Za-z0-9µμ][A-Za-z0-9µμ .,'/+()&-]{0,59}$")
+
+
+def _english(t):
+    t = re.sub(r"\s+", " ", str(t or "")).strip()
+    return t if TERM_RX.match(t) else ""
+
+
+def _era(group):
+    out = list(group)
+    for x in ERA_SYNONYMS.get(str(group[0]).lower(), []):
+        if x.lower() not in {y.lower() for y in out}:
+            out.append(x)
+    return out
+
+
+def _cap(w):
+    return w if (w.isupper() or any(c.isdigit() for c in w)) else w[:1].upper() + w[1:]
+
+
+def auto_title(core, power_nw=None):
+    """'Sub-100nW Subthreshold Leakage Sensor': the first term of each core group (English, ≤ 6 words)."""
+    words = []
+    if power_nw:
+        words.append(f"Sub-{power_nw:g}nW" if power_nw < 1000 else f"Sub-{power_nw / 1000:g}µW")
+    for g in core:
+        for w in str(g[0]).replace("-", " - ").split():
+            if w != "-" and _english(w):
+                words.append(_cap(w))
+    return re.sub(r"\s+-\s+", "-", " ".join(words[:6])).strip()
+
+
+def clean_title(t):
+    t = re.sub(r"\s+", " ", str(t or "")).strip()[:80]
+    return t if t and re.match(r"^[A-Za-z0-9µμ][A-Za-z0-9µμ .,'/+()&:-]*$", t) else ""
+
+
+def clean_spec(spec):
+    """A spec from the page or --topic-spec, checked (English terms only), or ValueError."""
+    if not isinstance(spec, dict):
+        raise ValueError("spec: expected an object")
+    core = spec.get("core") or []
+    if not isinstance(core, list) or not 1 <= len(core) <= 4:
+        raise ValueError("spec: 1–4 core concept groups")
+    out_core = []
+    for g in core:
+        if not isinstance(g, list) or not 1 <= len(g) <= 16:
+            raise ValueError("spec: a core group has 1–16 terms")
+        terms = [_english(t) for t in g]
+        if not all(terms):
+            raise ValueError("spec: core terms are short English words or phrases (no other scripts)")
+        out_core.append(list(dict.fromkeys(terms)))
+    def terms(k, n):
+        v = spec.get(k) or []
+        if not isinstance(v, list) or len(v) > n:
+            raise ValueError(f"spec: {k} is a list of at most {n} terms")
+        x = [_english(t) for t in v]
+        if not all(x):
+            raise ValueError(f"spec: {k} are short English words or phrases")
+        return list(dict.fromkeys(x))
+    p = spec.get("power_nw")
+    if p is not None and (isinstance(p, bool) or not isinstance(p, (int, float)) or not 0 < p <= 1e9):
+        raise ValueError("spec: power_nw is a number of nanowatts or empty")
+    seeds = spec.get("seeds") or []
+    if not isinstance(seeds, list) or len(seeds) > 10 or not all(isinstance(d, str) and DOI_RX.fullmatch(d.strip()) for d in seeds):
+        raise ValueError("spec: seeds are up to 10 DOIs")
+    prompt = str(spec.get("prompt") or "")
+    if len(prompt) > 2000:
+        raise ValueError("spec: the scope paragraph is at most 2,000 characters")
+    return {"title": clean_title(spec.get("title")), "prompt": prompt.strip(), "core": out_core,
+            "boosters": terms("boosters", 20), "exclude": terms("exclude", 20), "power_nw": p,
+            "seeds": [d.strip().lower() for d in seeds]}
+
+
+def plan_spec(prompt, cfg, title="", seeds=()):
+    """🪄 Plan Concepts (0 tokens): the scope paragraph → spec. Concept words become groups (with synonyms across
+    eras); modifiers, metric words and words with 0 local hits become soft boosters; "exclude / without / not …"
+    clauses become exclude terms; DOIs become seeds. At most 4 core groups: the most specific (fewest local hits)."""
+    text = str(prompt or "")
+    sd = [d.rstrip(".)").lower() for d in DOI_RX.findall(text)] + [str(d).strip().lower() for d in seeds or [] if str(d).strip()]
+    text = DOI_RX.sub(" ", text)
+    excl = []
+    for m in EXCLUDE_RX.finditer(text):
+        for ph in re.split(r",|;|/|\bor\b|\band\b", m[1]):
+            ph = _english(ph.strip().lower())
+            if ph and len(ph) >= 3 and ph not in excl and ph not in cfg["topic"]["generic_words"]:
+                excl.append(ph)
+    for m in CN_EXCLUDE_RX.finditer(text):
+        for ph in re.split(r",|/|\bor\b|\band\b", m[1]):
+            ph = _english(ph.strip().lower())
+            if ph and len(ph) >= 2 and ph not in excl:
+                excl.append(ph)
+    text = CN_EXCLUDE_RX.sub(" ", EXCLUDE_RX.sub(" ", text))
+    text = SCOPE_POWER_RX.sub(lambda m: f" sub-{m[1] or m[3]}{m[2] or m[4]} ", text)  # "below 100 nW" → the power ceiling
+    cjk = len(re.findall(r"[぀-ヿ㐀-鿿가-힯]", text))
+    groups, limit = parse_query(text, cfg)
+    if limit is not None:
+        groups = groups[:-1]  # the power regex group: power_nw boosts instead
+    groups = [g for g in ([_english(t) for t in g if _english(t)] for g in groups) if g and g[0].lower() not in PROSE]
+    syns = {k.lower() for k in cfg["topic"]["synonyms"]} | set(VARIANTS) | set(ERA_SYNONYMS)
+    merged = []
+    for g in groups:  # a group another one already covers ("gate-leakage" in leakage's synonyms) is not a concept of its own
+        if not any({t.lower() for t in g} & {t.lower() for t in m} for m in merged):
+            merged.append(g)
+    groups = merged
+    hits = group_hits(groups, cfg)
+    core, other, boost = [], [], []
+    for i, (g, n) in enumerate(zip(groups, hits)):
+        if g[0].lower() in BOOSTER_WORDS or n == 0:
+            boost.append(g[0])  # a modifier or metric word, or 0 local hits (a typo?): soft
+        elif g[0].lower() in syns or len(g) > 1:
+            core.append(_era(g))  # a domain concept the radar knows synonyms for
+        else:
+            other.append((10 ** 9 if n is None else n, i, g))
+    for n, i, g in sorted(other):  # plain words fill the core only while it has fewer than 2 groups
+        (core.append(g) if len(core) < 2 else boost.append(g[0]))
+    if len(core) > 4:
+        boost += [g[0] for g in core[4:]]
+        core = core[:4]
+    note = ""
+    if cjk and cjk > len(re.findall(r"[A-Za-z]", text)):
+        note = "The scope is mostly not in English: ✨ AI Extract Concepts reads it and answers in English (or write the scope in English)."
+    elif not core:
+        note = "No concept words found: add the circuit or mechanism you are after."
+    spec = {"title": clean_title(title) or auto_title(core, limit), "prompt": str(prompt or "").strip()[:2000],
+            "core": core, "boosters": list(dict.fromkeys(boost))[:20], "exclude": excl[:20], "power_nw": limit,
+            "seeds": list(dict.fromkeys(d for d in sd if DOI_RX.fullmatch(d)))[:10], "source": "0-token", "note": note}
+    return spec
+
+
+def spec_info(spec, cfg):
+    """Live preview numbers: local FTS5 hits per core group and booster, and how many local papers pass the core
+    gate (all groups but one, no exclude term), split into 🏛️ classics (< split year) and 🚀 recent."""
+    import sqlite3
+    import store as store_mod
+    core = spec.get("core") or []
+    out = {"core_hits": group_hits(core, cfg), "booster_hits": group_hits([[b] for b in spec.get("boosters") or []], cfg),
+           "exclude_hits": group_hits([[b] for b in spec.get("exclude") or []], cfg),
+           "pool": {"classic": 0, "recent": 0, "split": cfg["topic"]["recent_from_year"], "min_year": min_year(cfg)}}
+    sp = fetcher.HERE / cfg["paths"]["store_file"]
+    q = store_mod.fts_any([t for g in core for t in g])
+    if not sp.exists() or not q:
+        return out
+    need, split, y0 = max(1, len(core) - 1), cfg["topic"]["recent_from_year"], min_year(cfg)
+    try:
+        c = sqlite3.connect(f"file:{sp.as_posix()}?mode=ro", uri=True, timeout=5)
+        rows = c.execute("SELECT p.title, p.abstract, p.index_terms, p.published FROM papers_fts f JOIN papers p "
+                         "ON p.rowid = f.rowid WHERE papers_fts MATCH ? LIMIT 30000", (q,)).fetchall()
+        c.close()
+    except sqlite3.Error:
+        return out
+    for title, abstract, terms, pub in rows:
+        try:
+            it = " ".join(json.loads(terms)) if terms else ""
+        except ValueError:
+            it = ""
+        text = f"{title} {abstract or ''} {it}"
+        if sum(1 for g in core if any(fetcher._kw_hit(t, text) for t in g)) < need:
+            continue
+        if any(fetcher._kw_hit(x, f"{title} {abstract or ''}") for x in spec.get("exclude") or []):
+            continue
+        y = (relations._ym(pub) or 0) // 12
+        if y0 and y and y < y0:
+            continue
+        out["pool"]["classic" if y and y < split else "recent"] += 1
+    return out
+
+
+AI_PROMPT = """You plan a literature search for an engineering researcher (default field: analog / mixed-signal IC design).
+Read the scope below. It may be written in Chinese or mixed languages. Answer with ONE JSON object and nothing else,
+in ENGLISH ONLY:
+{{"title": "2-6 word English title", "core_groups": [["term", "synonym", "..."], ...], "boosters": ["term", ...],
+ "power_ceiling_nw": number or null, "exclude": ["term", ...]}}
+Rules: 2-4 core_groups, each 2-6 English synonyms that a paper title or abstract would use, bridging older (2000s-2010s)
+and current terminology (e.g. "subthreshold", "weak inversion"; "gate leakage", "tunneling current"; "PTAT", "bandgap").
+boosters = optional modifiers or metrics (they only raise the ranking). exclude = topics the scope says to leave out.
+Lowercase terms except acronyms. No regular expressions.
+Scope: {scope}
+Title hint (may be empty): {title}"""
+
+
+def ai_extract(prompt, cfg, title="", seeds=()):
+    """✨ AI Extract Concepts: one small `claude -p --model haiku` call → an English spec (checked like a typed one)."""
+    import subprocess
+    import sys
+    cc = cfg.get("claude") or {}
+    cmd = [cc.get("command") or "claude", "-p", "--output-format", "text", "--tools", "", "--strict-mcp-config",
+           "--model", "haiku"]
+    r = subprocess.run(cmd, input=AI_PROMPT.format(scope=str(prompt or "")[:2000], title=clean_title(title)),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+                       cwd=fetcher.HERE, shell=(sys.platform == "win32"))
+    if r.returncode != 0 or "{" not in (r.stdout or ""):
+        raise RuntimeError(f"claude -p (haiku) failed (exit {r.returncode}): {(r.stderr or r.stdout or '')[-300:]}")
+    t = r.stdout[r.stdout.index("{"):r.stdout.rindex("}") + 1]
+    try:
+        j = json.loads(t)
+    except ValueError:
+        raise RuntimeError("claude answered no readable JSON: try again or use 🪄 Plan Concepts")
+    core = [[_english(x) for x in g if _english(x)][:6] for g in (j.get("core_groups") or []) if isinstance(g, list)]
+    core = [g for g in core if g][:4]
+    p = j.get("power_ceiling_nw")
+    base = plan_spec(prompt, cfg, title, seeds)  # seeds, the exclude clauses and a fallback title
+    spec = {"title": clean_title(title) or clean_title(j.get("title")) or auto_title(core, p) or base["title"],
+            "prompt": str(prompt or "").strip()[:2000], "core": core or base["core"],
+            "boosters": [b for b in (_english(x) for x in j.get("boosters") or []) if b][:20],
+            "exclude": list({b.lower(): b for b in reversed([b for b in (_english(x) for x in j.get("exclude") or []) if b] + base["exclude"])}.values())[::-1][:20],
+            "power_nw": p if isinstance(p, (int, float)) and not isinstance(p, bool) and 0 < p <= 1e9 else base["power_nw"],
+            "seeds": base["seeds"], "source": "haiku"}
+    return spec
+
+
 def _powers_nw(text):
     return [float(n) * UNIT_NW[u] for n, u in POWER_RX.findall(text or "")]
 
 
-def relevance(p, groups, limit, cfg):
+def relevance(p, groups, limit, cfg, spec=None):
+    """v3.4.2 with a spec: groups = its core groups; an exclude term in the title / abstract rules the paper out;
+    boosters (+1 each, ≤ +4) and seed DOIs (the paper itself +6, citing one +3) only raise the ranking."""
     text = f"{p['title']} {p.get('abstract') or ''} {' '.join(p.get('index_terms') or [])}"
+    if spec and any(fetcher._kw_hit(x, f"{p['title']} {p.get('abstract') or ''}") for x in spec.get("exclude") or []):
+        return 0, 0
     hit_groups = sum(1 for g in groups if any(fetcher._kw_hit(t, text) for t in g))
     need = max(1, len(groups) - 1)
     if hit_groups < need:
@@ -159,6 +396,13 @@ def relevance(p, groups, limit, cfg):
     v = fetcher.verification(p, cfg) if p.get("abstract") else "unclear"
     r += {"silicon_verified": 1, "simulation_only": -4}.get(v, 0)
     r += min(2, max(0, fetcher.score(p, cfg)[0]) // 6)
+    if spec:
+        r += min(4, sum(1 for b in spec.get("boosters") or [] if fetcher._kw_hit(b, text)))
+        seeds = set(spec.get("seeds") or [])
+        if p.get("doi", "").lower() in seeds:
+            r += 6
+        elif seeds & {str(x)[4:] if str(x).startswith("doi:") else str(x) for x in p.get("refs") or []}:
+            r += 3
     return max(r, 0), hit_groups
 
 
@@ -369,15 +613,19 @@ def local_candidates(store, groups):
     return store.fts_search(None, limit=1_000_000, match=q) if q else store.where("1=1")
 
 
-def recall(query, cfg, store, log=print, top=25):
+def recall(query, cfg, store, log=print, top=25, spec=None, title=None):
     """Local-only search over the whole store (archived marks and the backfilled corpus included):
     0 API calls, 0 tokens. Writes Topic_Dives/<date>_recall_<slug>.md with curation boxes."""
-    groups, limit = parse_query(query, cfg)
+    if spec:  # v3.4.2: the planned core groups / boosters / exclude terms
+        groups, limit = [list(g) for g in spec["core"]], spec.get("power_nw")
+        query = title or spec.get("title") or query
+    else:
+        groups, limit = parse_query(query, cfg)
     hits = []
     for p in local_candidates(store, groups):  # v3.0: FTS5 prefilter (bm25 breaks ties)
         if not in_years(p, cfg):  # v3.2.3 topic.min_year
             continue
-        r = relevance(p, groups, limit, cfg)[0]
+        r = relevance(p, groups, limit, cfg, spec)[0]
         if r > 0:
             hits.append((r, p))
     hits.sort(key=lambda x: (-x[0], x[1].get("rank") or 0, str(x[1].get("published") or "")))
@@ -445,15 +693,22 @@ def zero_token_body(classic, recent, sel, cfg):
     return "\n".join(L)
 
 
-def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
+def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True, spec=None, title=None):
     tc = cfg["topic"]
     today = date.today()
-    groups, limit = parse_query(query, cfg)
-    log(f"Topic: {query}\n  concept groups: {[g[:3] for g in groups]}  power ceiling: {limit} nW")
+    if spec:  # v3.4.2: Short Title + planned spec (core groups gate, boosters / seeds rank, exclude terms filter)
+        groups, limit = [list(g) for g in spec["core"]], spec.get("power_nw")
+        title = clean_title(title) or spec.get("title") or clean_title(query)
+        query = title or query
+        log(f"Topic: {title}\n  core groups: {[g[:4] for g in groups]}  boosters: {spec.get('boosters')}  "
+            f"exclude: {spec.get('exclude')}  seeds: {len(spec.get('seeds') or [])}  power ceiling: {limit} nW")
+    else:
+        groups, limit = parse_query(query, cfg)
+        log(f"Topic: {query}\n  concept groups: {[g[:3] for g in groups]}  power ceiling: {limit} nW")
 
     # Stage A — local store + OpenAlex (0 IEEE calls)
     found = {p["doi"]: p for p in local_candidates(store, groups)}  # v3.0: FTS5 prefilter
-    found = {d: p for d, p in found.items() if in_years(p, cfg) and relevance(p, groups, limit, cfg)[0] > 0}
+    found = {d: p for d, p in found.items() if in_years(p, cfg) and relevance(p, groups, limit, cfg, spec)[0] > 0}
     log(f"  local store: {len(found)} relevant" + (f" (published {min_year(cfg)} or later)" if min_year(cfg) else ""))
     for d, p in openalex_search(groups, cfg, log).items():
         found.setdefault(d, p)
@@ -483,7 +738,7 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
         found = {d: p for d, p in found.items() if in_years(p, cfg)}
         log(f"  topic.min_year {min_year(cfg)}: {n0 - len(found)} older papers dropped")
     for p in found.values():
-        p["rel"] = relevance(p, groups, limit, cfg)[0]
+        p["rel"] = relevance(p, groups, limit, cfg, spec)[0]
     pre_c, pre_r = select(list(found.values()), cfg)
     for p in pre_c + pre_r:  # fill missing abstracts of the shortlist, then re-rank
         if use_ieee and not p.get("abstract") and p["doi"].startswith("10.1109/"):
@@ -491,7 +746,7 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
             arts = (r or {}).get("articles") or []
             if arts and arts[0].get("abstract"):
                 p["abstract"] = fetcher._clean(arts[0]["abstract"])
-                p["rel"] = relevance(p, groups, limit, cfg)[0]
+                p["rel"] = relevance(p, groups, limit, cfg, spec)[0]
     classic, recent = select(list(found.values()), cfg)
     log(f"  IEEE topic calls today: {store.calls_today('ieee_topic')}/{tc['ieee_topic_reserve']}; "
         f"selected {len(classic)} classics + {len(recent)} recent")
@@ -519,7 +774,11 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
         log(f"  ♻️ recalled from archive: {len(recalled)}")
     topics = store.meta("topics") or {}
     topics[slug] = {"query": query, "date": today.isoformat(), "dois": [p["doi"] for _, _, p in sel],
-                    "n_classic": len(classic)}  # dois = classics, then recent (dashboard 🏛️/🚀 badges)
+                    "n_classic": len(classic),  # dois = classics, then recent (dashboard 🏛️/🚀 badges)
+                    "years": {"min_year": min_year(cfg), "split_year": tc["recent_from_year"]}}
+    if spec:  # v3.4.2: ✏️ Edit / Re-run loads these back into STARTUP.html
+        topics[slug].update(title=query, prompt=spec.get("prompt") or "",
+                            spec={k: spec.get(k) for k in ("core", "boosters", "exclude", "power_nw", "seeds")})
     store.meta("topics", topics)
 
     # Stage C — one claude call (worded for the domain preset), or the 0-token tables
@@ -561,8 +820,12 @@ def run(query, cfg, store, max_ieee, claude, log=print, use_claude=True):
          f"citations) + {len(recent)} recent papers · sources: local store, OpenAlex"
          + (", PubMed" if pubmed_active(cfg) else "")
          + (f", IEEE Xplore API ({store.calls_today('ieee_topic')} topic calls today)" if use_ieee else "") + "*", "",
-         f"**Query parsed as:** {' AND '.join('(' + ' | '.join(t.split('::')[0][3:] if t.startswith('re:') else t for t in g[:4]) + ')' for g in groups)}"
-         + (f" · power ≤ {limit:g} nW boosts relevance" if limit else ""), "", body, "",
+         *([f"**Scope:** {spec['prompt']}", ""] if spec and spec.get("prompt") else []),
+         f"**{'Core concepts (all but one)' if spec else 'Query parsed as'}:** {' AND '.join('(' + ' | '.join(t.split('::')[0][3:] if t.startswith('re:') else t for t in g[:4]) + ')' for g in groups)}"
+         + (f" · power ≤ {limit:g} nW boosts relevance" if limit else "")
+         + (f" · 🚀 boosters: {', '.join(spec['boosters'])}" if spec and spec.get("boosters") else "")
+         + (f" · 🚫 excluded: {', '.join(spec['exclude'])}" if spec and spec.get("exclude") else "")
+         + (f" · 🌱 {len(spec['seeds'])} seed DOI(s)" if spec and spec.get("seeds") else ""), "", body, "",
          "## 4. Lineage & Citation Map", ""]
     L += ([graph, "", "Arrows: the left paper's reference list cites the right one (OpenAlex)."] if graph else
           ["_No citation links among the selected papers in OpenAlex (reference lists missing or no direct citations)._"])

@@ -1378,10 +1378,11 @@ def _write_pages(store, cfg, log=print):
     peers = write_peer_dashboards(store, cfg, log)
     n = write_dashboard(store, cfg, root / "DASHBOARD.html", peers)
     pages = 0
-    for d in (Path(cfg["paths"]["weekly_dir"]), Path(cfg["paths"]["topic_dir"])):
-        for f in d.glob("*.md") if d.exists() else []:
-            write_report_html(f, store, "../DASHBOARD.html", curation.page_sync_config(cfg))
-            pages += 1
+    wd = Path(cfg["paths"]["weekly_dir"])
+    # v3.4.2: topic reports only for live dives and recalls (curation.topic_md_files): no orphan pages
+    for f in (list(wd.glob("*.md")) if wd.exists() else []) + curation.topic_md_files(cfg, store.meta("topics") or {}):
+        write_report_html(f, store, "../DASHBOARD.html", curation.page_sync_config(cfg))
+        pages += 1
     write_phone_link(cfg)
     log(f"HTML: DASHBOARD.html ({n} papers) + {pages} report pages"
         + "".join(f" + Peers/{p['file']} ({len(p['recs'])})" for p in peers))

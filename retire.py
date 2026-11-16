@@ -325,6 +325,41 @@ def drop_antique(store, cfg, key, log=print):
     return {"papers": n}
 
 
+def drop_topic(store, cfg, slug, log=print):
+    """v3.4.2 🗑 Delete (--drop-topic): the dive is gone for good, unlike 🏺 Retire. It leaves meta['topics'], its
+    report files (<date>_<slug>.md / .html and <date>_recall_<slug>.*) are deleted, and its papers that no other dive
+    lists and that carry no curation (normal mark, no ⭐, 🏷️, Si call or 📌) go from status 'topic' back to the corpus
+    ('archive'). Curated papers keep everything."""
+    from pathlib import Path
+    topics = store.meta("topics") or {}
+    t = topics.pop(slug, None)
+    if t is None:
+        raise ValueError(f"no topic dive {slug!r} (have: {', '.join(topics) or 'none'})")
+    others = {str(d).lower() for x in topics.values() for d in x.get("dois") or []}
+    back = kept = 0
+    for d in {str(d).lower() for d in t.get("dois") or []} - others:
+        if store.db.execute("SELECT 1 FROM papers WHERE doi=? AND status='topic' AND COALESCE(user_mark,'normal')='normal' "
+                            "AND COALESCE(cited,0)=0 AND COALESCE(user_note,'')='' AND user_silicon IS NULL AND pin IS NULL",
+                            (d,)).fetchone():
+            store.update(d, {"status": "archive"}, commit=False)
+            back += 1
+        else:
+            kept += 1
+    store.db.commit()
+    store.meta("topics", topics)
+    td = Path(cfg["paths"]["topic_dir"])
+    files = [td / f"{t.get('date')}_{slug}{ext}" for ext in (".md", ".html")]
+    files += list(td.glob(f"*_recall_{slug}.md")) + list(td.glob(f"*_recall_{slug}.html")) if td.exists() else []
+    gone = []
+    for f in files:
+        if f.exists():
+            f.unlink()
+            gone.append(f.name)
+    log(f"🗑 Deleted topic dive {slug}: {back} uncurated papers back to the corpus, {kept} kept (curated or in another "
+        f"dive), {len(gone)} report file(s) removed{': ' + ', '.join(gone) if gone else ''} ({len(topics)} dives left)")
+    return {"back": back, "kept": kept, "files": gone}
+
+
 def set_topic_retired(store, slug, retired=True, log=print):
     topics = store.meta("topics") or {}
     if slug not in topics:

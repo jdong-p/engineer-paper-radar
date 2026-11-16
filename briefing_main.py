@@ -641,7 +641,34 @@ def render_beyond(beyond, today):
     return L
 
 
-def update_index(weekly_dir, topic_dir=None):
+def rerender_week(store, cfg, today, log=print):
+    """v3.4.2: after a pillar 🏺 retire / 🗑 delete / ↺ restore, re-render this week's in-progress report (0 tokens,
+    cached digests, the last collection's numbers from meta['last_run']) so 📄 Open Weekly Report shows the new
+    pillars now, not after tomorrow's run. A week already marked ✅ Final is never touched."""
+    week, friday = fetcher.week_of(today)
+    out = Path(cfg["paths"]["weekly_dir"]) / f"{week}.md"
+    if not out.exists() or "✅ **Final**" in out.read_text(encoding="utf-8"):
+        return False
+    ieee_q = ("status='candidate' AND week=? AND grp='ieee'", (week,))
+    allc = sorted(store.where(*ieee_q), key=lambda p: (-p["score"], p["first_seen"]))
+    fresh = [p for p in allc if not p.get("catchup")]
+    catch = [p for p in allc if p.get("catchup")]
+    papers, also = fresh[:cfg["weekly_top"]], fresh[cfg["weekly_top"]:]
+    all_beyond = sorted(store.where("status='candidate' AND week=? AND grp='beyond'", (week,)), key=lambda p: -p["score"])
+    beyond = [p for p in all_beyond if (p.get("user_mark") or "normal") != "archived"]
+    edges, notes = relations.week_relations(papers, store)
+    notes.update(relations.week_relations(catch, store)[1])
+    run = store.meta("last_run") or {}
+    run = {"new": run.get("new", 0), "new_candidates": run.get("new_candidates") or [],
+           "ieee_calls": run.get("ieee_calls", store.calls_today("ieee")), "errors": run.get("errors") or []}
+    vpn = {"connected": None, "message": "public APIs only (re-rendered after a pillar change, 0 tokens)"}
+    out.write_text(render(week, friday, today, vpn, papers, also, catch, beyond, notes, edges, "", False, store, cfg, run),
+                   encoding="utf-8")
+    log(f"Weekly report {week} re-rendered (still in progress, 0 tokens): the pillar change shows there now")
+    return True
+
+
+def update_index(weekly_dir, topic_dir=None, topics=None):
     rows = ["# Engineer Paper Radar — Index", "", "**[DASHBOARD.html](DASHBOARD.html)** — open in a browser to filter, search and click ⭐/🗄️ · "
             "[MASTER_TABLE.md](MASTER_TABLE.md) — ⭐ cite, ✅ selected, 📋 candidate and 🗄️ archived papers · "
             "[cite.bib](cite.bib) — ⭐ Cite only ·[selected_pool.bib](selected_pool.bib) — ✅ + ⭐ · "
@@ -654,7 +681,10 @@ def update_index(weekly_dir, topic_dir=None):
         rows.append(f"- [{f.stem}]({weekly_dir.name}/{f.name}) — {n} papers, {state}")
     if topic_dir and topic_dir.exists():
         rows += ["", "## Topic deep-dives", ""]
+        live = None if topics is None else {f"{t.get('date')}_{s}" for s, t in topics.items()}
         for f in sorted(topic_dir.glob("*.md"), reverse=True):
+            if live is not None and f.stem not in live and "_recall_" not in f.stem:
+                continue  # v3.4.2: a deleted dive's leftover report is not linked
             first = re.sub(r"^# Topic Deep-Dive: ", "", f.read_text(encoding="utf-8").splitlines()[0])
             rows.append(f"- [{f.stem[:10]} — {first}]({topic_dir.name}/{f.name})")
     (weekly_dir.parent / "INDEX.md").write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -790,6 +820,9 @@ def main():
                     "before YYYY (this run only; 0 = all years; default: topic.min_year)")
     ap.add_argument("--split-year", type=int, metavar="YYYY", help="with --topic: papers before YYYY are classics, "
                     "from YYYY on recent (this run only; default: topic.recent_from_year)")
+    ap.add_argument("--topic-title", help="v3.4.2: a short English title for --topic / --recall (dropdown, report, file name)")
+    ap.add_argument("--topic-spec", help='v3.4.2: the planned dive as JSON: {"core": [[term, synonym], …], "boosters": […], '
+                    '"exclude": […], "power_nw": n, "seeds": [doi, …], "prompt": "scope paragraph"}')
     ap.add_argument("--recall", help="search the whole store (incl. archived + corpus) locally: 0 API calls, 0 tokens")
     ap.add_argument("--drop-topic", metavar="SLUG", help="delete a topic dive permanently from 🔎 Topic Dives (its papers and "
                     "report files stay; --retire-topic keeps its 🔎 badges)")
@@ -864,6 +897,12 @@ def main():
     if (cfg.get("claude") or {}).get("enabled") is False and not a.no_claude:
         a.no_claude = True  # legacy v3.3.3 switch; since v3.4.0 STARTUP.html writes it as the mirror of claude.mode = draft
         print("Claude AI: 🧮 0-Token Draft (config.json claude.enabled = false): running as --no-claude", flush=True)
+    tspec = None  # v3.4.2: --topic-spec (STARTUP.html's planned dive)
+    if a.topic_spec:
+        try:
+            tspec = topic.clean_spec(json.loads(a.topic_spec))
+        except (ValueError, TypeError) as e:
+            ap.error(f"--topic-spec: {e}")
     if a.plan_keywords is not None:  # v3.0.5, read only: prints the plan (STARTUP.html 🪄 shows it in a preview)
         import keyword_planner
         return keyword_planner.cli(cfg, a.plan_keywords)
@@ -963,7 +1002,7 @@ def main():
 
     def refresh_catalog():
         catalog.write_all(store, cfg)
-        update_index(Path(cfg["paths"]["weekly_dir"]), topic_dir)
+        update_index(Path(cfg["paths"]["weekly_dir"]), topic_dir, store.meta("topics") or {})
         curation.sync_markdown_marks(store, cfg, read_edits=False)  # bring every report's boxes in line
         html_renderer.write_all(store, cfg)  # after the .md boxes are final
 
@@ -1024,13 +1063,13 @@ def main():
         except ValueError as e:
             print(f"[retire] {e}", file=sys.stderr)
             return 1
-    if a.drop_topic:  # v3.0.6: STARTUP.html → 🔎 Topic Deep-Dive → 🗑 Delete
-        topics = store.meta("topics") or {}
-        if topics.pop(a.drop_topic, None) is None:
-            print(f"No topic dive {a.drop_topic!r} (have: {', '.join(topics) or 'none'})", file=sys.stderr)
+    if a.drop_topic:  # v3.0.6 🗑 Delete; v3.4.2: report files removed, uncurated papers back to the corpus
+        import retire
+        try:
+            retire.drop_topic(store, cfg, a.drop_topic)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
             return 1
-        store.meta("topics", topics)
-        print(f"Removed topic dive {a.drop_topic} ({len(topics)} left)")
     if a.min_year is not None or a.split_year is not None:  # v3.2.3: year bounds for this run only
         tcfg = cfg.setdefault("topic", {})
         if a.min_year is not None:
@@ -1042,9 +1081,9 @@ def main():
             tcfg["recent_from_year"] = a.split_year
         print(f"Topic years: {tcfg.get('min_year') or 'all'} onward, recent from {tcfg.get('recent_from_year')}")
     if a.recall:
-        topic.recall(a.recall, cfg, store)
+        topic.recall(a.recall, cfg, store, spec=tspec, title=a.topic_title)
     if a.topic:
-        topic.run(a.topic, cfg, store, a.max_ieee, claude, print, use_claude=mode != "draft")
+        topic.run(a.topic, cfg, store, a.max_ieee, claude, print, use_claude=mode != "draft", spec=tspec, title=a.topic_title)
     if a.add or a.seed_pillars is not None or a.pin_anchors:
         print(f"Anchors: {pins.sync_anchors(store, cfg)} pinned as 🏛️ Classic / Anchor")
         if a.pin_anchors and a.pillar:  # v3.0.7: STARTUP.html → ＋ Add New Pillar files its anchors under it
@@ -1092,6 +1131,8 @@ def main():
                     digest_beyond(store, cfg, print, mode)
             except Exception as e:
                 print(f"Digest failed (retried next run): {e}", file=sys.stderr)
+        if a.retire_pillar or a.delete_pillar or a.unretire_pillar:  # v3.4.2: this week's report too
+            rerender_week(store, cfg, today)
         print("Rebuilding DASHBOARD.html & STARTUP.html…", flush=True)
         refresh_catalog()
         print(f"Done in {time.time() - T0:.1f} s.", flush=True)
@@ -1113,6 +1154,7 @@ def main():
 
     print("Collecting (IEEE API / Crossref / OpenAlex, 0 tokens) ...")
     run = fetcher.collect(cfg, store, today, backfill=not a.no_backfill)
+    store.meta("last_run", {k: run.get(k) for k in ("new", "new_candidates", "ieee_calls", "errors")})  # v3.4.2
     print(f"{run['new']} new records, {len(run['new_candidates'])} new matches, IEEE calls today {run['ieee_calls']}")
     print("Catch-up: " + pillar_line(catalog.pillar_replenish(store, cfg, week)))
     print(f"Anchors: {pins.sync_anchors(store, cfg)} pinned as 🏛️ Classic / Anchor")

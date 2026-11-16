@@ -1112,6 +1112,8 @@ def _topic_status(cfg):
         dois, nc = t.get("dois") or [], int(t.get("n_classic") or 0)
         f = td / f"{t.get('date')}_{slug}.html"
         out["dives"].append({"slug": slug, "query": t.get("query") or slug, "date": t.get("date") or "", "n_classic": nc,
+                             "title": t.get("title") or "", "prompt": t.get("prompt") or "", "spec": t.get("spec"),
+                             "years": t.get("years") or {},  # v3.4.2: ✏️ Edit / Re-run
                              "n_recent": max(len(dois) - nc, 0), "classics": dois[:nc][:6], "retired": bool(t.get("retired")),
                              "href": f"{rel}/{f.name}" if f.exists() else ""})
     if td.is_dir():
@@ -1181,8 +1183,10 @@ def plan(action, cfg, opts=None):
     q = str(o.get("query") or "<your research question>")  # --topic=… / --recall=…: a query can't pose as a flag
     years = ([f"--min-year={int(o['min_year'])}"] if o.get("min_year") is not None else []) \
         + ([f"--split-year={int(o['split_year'])}"] if o.get("split_year") is not None else [])  # v3.2.3
-    return {"topic_recall": [["--recall=" + q] + years[:1]],
-            "topic_dive": [["--topic=" + q] + years + ([] if claude_on(cfg) and not o.get("zero") else ["--no-claude"])],
+    tsp = ([f"--topic-title={o['title']}"] if o.get("title") else []) \
+        + (["--topic-spec=" + json.dumps(o["spec"], ensure_ascii=False)] if o.get("spec") else [])  # v3.4.2
+    return {"topic_recall": [["--recall=" + q] + years[:1] + tsp],
+            "topic_dive": [["--topic=" + q] + years + tsp + ([] if claude_on(cfg) and not o.get("zero") else ["--no-claude"])],
             "drop_topic": [["--drop-topic=" + str(o.get("slug") or "<slug>")]],
             "retire_topic": [["--retire-topic=" + str(o.get("slug") or "<slug>")]],  # v3.0.8: 🏺 Retire as Antique
             "unretire_topic": [["--unretire-topic=" + str(o.get("slug") or "<slug>")]],
@@ -1560,6 +1564,26 @@ def api_post(path, req, jobs):
         if path == "/api/plan_keywords":  # v3.0.5: 🪄 the 0-token keyword & weight planner (read only)
             import keyword_planner
             return keyword_planner.api(load_cfg(), req)
+        if path == "/api/topic_plan":  # v3.4.2: 🪄 Plan Concepts (0 tokens) / ✨ AI Extract (haiku) / recount
+            import topic
+            cfg = load_cfg()
+            if req.get("spec") is not None:
+                spec = topic.clean_spec(req["spec"])
+            else:
+                prompt = str(req.get("prompt") or "")[:2000]
+                seeds = [str(d) for d in (req.get("seeds") or [])][:10] if isinstance(req.get("seeds"), list) else []
+                if not prompt.strip() and not str(req.get("title") or "").strip():
+                    return 400, {"ok": False, "error": "write a scope paragraph (or a title) first"}
+                if req.get("ai"):
+                    if not has_claude(cfg):
+                        return 400, {"ok": False, "error": "✨ AI Extract needs the Claude CLI (none found on this machine)"}
+                    try:
+                        spec = topic.ai_extract(prompt or str(req.get("title")), cfg, req.get("title") or "", seeds)
+                    except RuntimeError as e:
+                        return 502, {"ok": False, "error": str(e)}
+                else:
+                    spec = topic.plan_spec(prompt or str(req.get("title")), cfg, req.get("title") or "", seeds)
+            return 200, {"ok": True, "spec": spec, "info": topic.spec_info(spec, cfg)}
         if path == "/api/set_env_key":  # v3.3.3: write-only key setter (the value never comes back)
             return 200, set_env_key(req)
         if path == "/api/cancel_job":  # v3.3.2: ⏹ Stop / Unlock
@@ -1601,6 +1625,12 @@ def api_post(path, req, jobs):
                 if not 3 <= len(qq) <= 300 or not re.search(r"[^\W\d_]{2}", qq):
                     return 400, {"ok": False, "error": "type a topic or research question (3–300 characters)"}
                 req["query"], req["zero"] = qq, bool(req.get("zero"))
+                import topic
+                if req.get("spec") is not None:  # v3.4.2: the planned dive (English terms only)
+                    req["spec"] = topic.clean_spec(req["spec"])
+                req["title"] = topic.clean_title(req.get("title")) or None
+                if req.get("title") is None and str(req.get("title_raw") or "").strip():
+                    return 400, {"ok": False, "error": "the topic title must be a short English label (letters, digits, - / &)"}
                 for k, lo, hi in (("min_year", 0, 2100), ("split_year", 1950, 2100)):  # v3.2.3, this run only
                     y = req.get(k)
                     if y in (None, ""):
@@ -1641,7 +1671,7 @@ def api_post(path, req, jobs):
                 if not isinstance(an, list) or len(an) > 10 or not all(isinstance(d, str) and DOI_RX.match(d) for d in an):
                     return 400, {"ok": False, "error": "add_pillar: anchors must be up to 10 DOIs"}
             job = jobs.start(action, {k: req.get(k) for k in ("clone_url", "clone_dir", "spec", "query", "zero", "slug",
-                                                              "min_year", "split_year",
+                                                              "min_year", "split_year", "title", "spec",
                                                               "pillar", "anchors", "key")})
             return 200, {"ok": True, "changed": changed, "job": job}
     except ValueError as e:
@@ -2044,7 +2074,7 @@ def render(data):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
 <title>{NAME} — Setup &amp; Control Center</title><style>{html_renderer.CSS}{CSS}</style></head>
-<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.4.1</span></h1>
+<body class="ccp"><header class="bar"><h1>⚙️ Setup &amp; Control Center <span class="muted small">v3.4.2</span></h1>
 <span id="mode" class="btn pill" title="">⏳ Connecting…</span>
 <span id="dirty" class="dirty" hidden>● unsaved changes</span>
 <button class="btn sec" onclick="theme()" title="light/dark">◐</button></header>
@@ -2093,6 +2123,13 @@ CSS = r"""
 .sbadge.boost{color:var(--ok);border-color:var(--ok)}
 .kv.boosters>span{display:flex;flex-wrap:wrap;gap:6px;align-items:center}.kv.boosters .keybox{display:inline-flex;flex-wrap:wrap;gap:4px}
 .kv.boosters .keybox[hidden]{display:none}.kv.boosters .keybox .in{width:16em}.kv.boosters select.in{width:auto}.kv.boosters span>.muted,.kv.boosters span>details{flex-basis:100%}
+.tform{display:grid;gap:4px;margin:6px 0}.tform .flabel{font-weight:600;margin-top:4px}.tscope{min-height:4.2em}
+.tplan{border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:8px 0;background:var(--chip)}
+.tplanrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}.tplabel{font-weight:600;min-width:8.5em}
+.chip.core{border-color:var(--accent)}.chip.excl{text-decoration:line-through;text-decoration-color:var(--warn)}.chip.excl .t{text-decoration:inherit}
+.chip.zero{border-color:var(--warn);color:var(--warn)}.in.w14{width:14em}
+.tplanrow>*{min-width:0;max-width:100%}.tplan .chip .t{white-space:normal;overflow-wrap:anywhere}
+@media (max-width:560px){.tplabel{min-width:0;flex-basis:100%}.in.w14{flex:1 1 100%;width:auto}#topicq,#ttitle,.ccp .tform .in,.ccp .tplan .in{font-size:16px}}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin:10px 0}
 .vcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-width:0}
 .vcard.flag{border-color:var(--cite);box-shadow:inset 3px 0 0 var(--cite)}.vtop{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
@@ -2823,9 +2860,62 @@ function topicStatic(lines) {
     h('b', {}, STARTER ? (isWin ? 'Start_Radar_GUI.cmd' : 'Start_Radar_GUI.command') : 'radar_sync_server.py'),
     ' for one-click runs, or run in the radar folder:'), cmdRow(isWin ? `cd /d "${D.here}"` : `cd "${D.here}"`), lines.map(cmdRow)]);
 }
+// v3.4.2: ① Short Title + ② Scope paragraph (+ seed DOIs) → 🪄 planned concept groups (editable chips) → run
+let TF = (() => { try { return JSON.parse(localStorage.getItem('paper_radar_topic_form') || 'null'); } catch (e) { return null; } })()
+  || {title: '', prompt: TQ || '', seeds: '', spec: null, info: null, edited: false};
+let TPLAN_T = 0, TPLAN_BUSY = false;
+function tfSave() { try { localStorage.setItem('paper_radar_topic_form', JSON.stringify(Object.assign({}, TF, {info: null}))); } catch (e) {} }
+function tfSeeds() { return (TF.seeds || '').split(/[\s,;]+/).map(cleanDoi).filter(d => /^10\.\d{4,9}\/\S+$/.test(d)); }
+async function planTopic(ai, quiet) {  // 🪄 0 tokens, or ✨ one haiku call; quiet = the live debounce
+  if (!API) { if (!quiet) alert('Planning needs the Control Center server (start Start_Radar_GUI or the radar server).'); return; }
+  if (!(TF.prompt || '').trim() && !(TF.title || '').trim()) { if (!quiet) alert('Write a scope paragraph first.'); return; }
+  if (TPLAN_BUSY) return; TPLAN_BUSY = true;
+  const st = $('#tplanstate'); if (st) st.textContent = ai ? '✨ Asking Claude (haiku)…' : '🪄 Planning…';
+  let r; try { r = await call('POST', '/api/topic_plan', {prompt: TF.prompt, title: TF.title, seeds: tfSeeds(), ai: !!ai}, ai ? 200000 : 20000); }
+  catch (e) { r = {ok: false, error: String(e)}; } finally { TPLAN_BUSY = false; }
+  if (!r.ok) { if (st) st.textContent = '⚠️ ' + (r.error || 'no answer'); if (!quiet) alert('Not planned: ' + (r.error || 'no answer')); return; }
+  TF.spec = r.spec; TF.info = r.info; TF.edited = false;
+  if (!(TF.title || '').trim() || ai) TF.autoTitle = r.spec.title;
+  tfSave(); renderTopic();
+  toast(ai ? '✨ Concepts extracted by Claude (haiku): review the chips, then run' : '🪄 Concepts planned (0 tokens)', 3500);
+}
+async function recount() {  // after a chip edit: hits and the pool estimate for the edited spec
+  if (!API || !TF.spec || !(TF.spec.core || []).length) return renderTopic();
+  let r; try { r = await call('POST', '/api/topic_plan', {spec: specOut()}, 20000); } catch (e) { r = null; }
+  if (r && r.ok) TF.info = r.info;
+  tfSave(); renderTopic();
+}
+function specOut() {
+  const s = TF.spec || {};
+  return {title: (TF.title || '').trim() || s.title || '', prompt: TF.prompt || '', core: s.core || [], boosters: s.boosters || [],
+          exclude: s.exclude || [], power_nw: s.power_nw || null, seeds: tfSeeds().length ? tfSeeds() : (s.seeds || [])};
+}
+function chipRow(label, tip, items, hits, cls, onDel, onAdd, ph) {
+  const add = h('input', {class: 'in w14', placeholder: ph, 'aria-label': label,
+    onkeydown: e => { if (e.key === 'Enter' && e.target.value.trim()) { e.preventDefault(); onAdd(e.target.value.trim()); } }});
+  return h('div', {class: 'tplanrow'}, h('span', {class: 'tplabel', title: tip}, label),
+    h('span', {class: 'chips'}, items.map((it, i) => h('span', {class: 'chip ' + cls + (hits && hits[i] === 0 ? ' zero' : ''), title: hits && hits[i] != null ? `${fmt(hits[i])} papers in your store` + (hits[i] === 0 ? ': check the spelling' : '') : ''},
+      h('span', {class: 't'}, Array.isArray(it) ? it.join(' | ') : it),
+      hits && hits[i] != null ? h('span', {class: 'muted small'}, hits[i] === 0 ? ' ⚠️ 0' : ` ${fmt(hits[i])}`) : null,
+      h('button', {title: 'Remove', onclick: () => onDel(i)}, '×'))), add));
+}
 function topicRun(a) {
-  const q = (TQ || '').replace(/\s+/g, ' ').trim();
-  if (q.length < 3) return alert('Type a topic or research question first.');
+  const tp0 = S.topic || {};
+  if (TF.spec && (TF.spec.core || []).length) {  // v3.4.2: the planned dive
+    const spec = specOut(), title = spec.title;
+    if (!title) return alert('Give the dive a short English title (① Topic Title), or plan the concepts first.');
+    if (!/^[A-Za-z0-9µμ][A-Za-z0-9µμ .,'\/+()&:-]*$/.test(title)) return alert('The title must be a short English label (letters, digits, - / &).');
+    const zero = TZERO || !claudeOn();
+    TLAST = {a, q: title, slug: topicSlug(title)};
+    if (!API) return topicStatic([`${pyCmd()} briefing.py ${a === 'topic_recall' ? '--recall' : '--topic'} "${title.replace(/"/g, "'")}" --topic-title "${title.replace(/"/g, "'")}"` +
+                                  (+tp0.min_year > 1900 ? ` --min-year ${tp0.min_year}` : '') + (a === 'topic_dive' && zero ? ' --no-claude' : '') +
+                                  '   (the planned concepts need the Control Center server; this runs on the title only)']);
+    const years = {min_year: +tp0.min_year || 0, split_year: +tp0.recent_from_year || 2023};
+    if (years.min_year && years.min_year > years.split_year) return alert('The earliest year must not be after the classic / recent split year.');
+    return run(a, {query: title, title, title_raw: title, spec, zero, ...years});
+  }
+  const q = (TF.title || TF.prompt || TQ || '').replace(/\s+/g, ' ').trim();
+  if (q.length < 3) return alert('Write a title or a scope paragraph first (then 🪄 Plan Concepts).');
   const zero = TZERO || !claudeOn();
   TLAST = {a, q, slug: topicSlug(q)};
   const ty = S.topic || {};
@@ -2837,9 +2927,17 @@ function topicRun(a) {
   if (years.min_year && years.min_year > years.split_year) return alert('The earliest year must not be after the classic / recent split year.');
   run(a, {query: q, zero, ...years});
 }
+function editDive(t) {  // v3.4.2: ✏️ Edit / Re-run: the dive's title, scope, years and planned concepts back into the form
+  TF = {title: t.title || t.query, prompt: t.prompt || t.query, seeds: ((t.spec || {}).seeds || []).join(' '), spec: t.spec ? Object.assign({title: t.title || t.query}, t.spec) : null, info: null, edited: !!t.spec};
+  const tp = S.topic = S.topic || {};
+  if (t.years && t.years.split_year) { tp.min_year = t.years.min_year || 0; tp.recent_from_year = t.years.split_year; changed(); }
+  tfSave(); renderTopic(); openTo('#c-topic', '#ttitle');
+  if (TF.spec) recount(); else planTopic(false, true);
+  toast(`✏️ “${t.query}” loaded: change what you like, then run it again (same title = the dive is replaced)`, 6000);
+}
 function dropTopic(t) {
   if (!API) return topicStatic([`${pyCmd()} briefing.py --drop-topic ${t.slug}`]);
-  if (!confirm(`Delete the topic dive “${t.query}” (${t.date}) permanently? Its papers lose their 🔎 / 🏺 badge (marks, notes and report files stay). 🏺 Retire keeps everything.`)) return;
+  if (!confirm(`🗑 Delete the topic dive “${t.query}” (${t.date}) for good?\n\n• Its report files (Topic_Dives/${t.date}_${t.slug}.md / .html) are deleted.\n• Its papers you never marked, noted or pinned go back to the corpus; ✅ / ⭐ / 🏷️ / 📌 papers keep everything.\n\n🏺 Retire instead keeps the dive and its report as an antique.`)) return;
   run('drop_topic', {slug: t.slug});
 }
 function retireTopic(t, back) {  // v3.0.8: 🏺 Retire as Antique / ↺ Restore (non-destructive)
@@ -3036,8 +3134,32 @@ function addPillarWizard(pre) {
 function renderTopic() {
   const el = $('#c-topic'); if (!el) return;
   const T = ST.topics || {dives: [], recalls: []}, noClaude = !claudeOn();
-  const inp = ta({class: 'in wide', id: 'topicq', value: TQ, placeholder: 'e.g. sub-100nW sensor design focusing on low-leakage techniques',
-    oninput: e => { TQ = e.target.value; try { localStorage.setItem('paper_radar_topic_q', TQ); } catch (x) {} topicPreview(); }}, {single: ' ', enter: () => topicRun('topic_dive')});
+  // v3.4.2: ① title ② scope paragraph ③ seed DOIs → 🪄 / ✨ plan → editable chips
+  const live = () => { tfSave(); clearTimeout(TPLAN_T); if (!TF.edited) TPLAN_T = setTimeout(() => planTopic(false, true), 900); };
+  const tin = h('input', {class: 'in wide', id: 'ttitle', value: TF.title, maxlength: 80, placeholder: TF.autoTitle ? `auto: ${TF.autoTitle}` : 'e.g. Leakage-Biased Sub-nW Sensors (2–6 English words; blank = auto)',
+    oninput: e => { TF.title = e.target.value; tfSave(); }});
+  const inp = ta({class: 'in wide tscope', id: 'topicq', value: TF.prompt, placeholder: 'e.g. Sub-threshold temperature or voltage sensors biased by leakage / gate-leakage current, below 100 nW, from the classic 2000s designs to today. Exclude MEMS and optical sensors. (Chinese is fine: ✨ AI Extract answers in English.)',
+    oninput: e => { TF.prompt = e.target.value; TQ = TF.prompt; live(); }}, {});
+  const seeds = h('input', {class: 'in wide', value: TF.seeds, placeholder: 'optional seed / classic anchor DOIs: 10.1109/JSSC.2012.1234567 …',
+    oninput: e => { TF.seeds = e.target.value; live(); }});
+  const sp = TF.spec, inf = TF.info || {}, edit = () => { TF.edited = true; recount(); };
+  const ai = h('button', {class: 'btn', title: 'One small claude -p --model haiku call (≈ 150 tokens): reads the paragraph (English or Chinese) and proposes English concept groups that bridge older and current terminology',
+    disabled: !ST.env.has_claude, onclick: () => planTopic(true)}, '✨ AI Extract Concepts (Haiku)');
+  const planBox = h('div', {class: 'tplan'}, h('div', {class: 'row'},
+      h('button', {class: 'btn primary', onclick: () => planTopic(false)}, '🪄 Plan Concepts (0-Token)'), ai,
+      h('span', {class: 'muted small', id: 'tplanstate'}, sp ? (sp.source === 'haiku' ? '✨ planned by Claude (haiku)' : '🪄 planned locally (0 tokens)') + (TF.edited ? ' · edited' : '') : 'type a scope: it is planned as you write')),
+    sp ? [
+      chipRow('🎯 Core concepts', 'A paper must match all core groups but one; the words inside a group are synonyms (OR)', sp.core || [], inf.core_hits, 'core',
+        i => { sp.core.splice(i, 1); edit(); }, v => { if ((sp.core || []).length >= 4) return alert('At most 4 core groups: add synonyms with |'); sp.core.push(v.split('|').map(x => x.trim()).filter(Boolean)); edit(); }, 'term | synonym, Enter'),
+      chipRow('🚀 Boosters', 'Soft: each one found adds to the ranking, none is required', sp.boosters || [], inf.booster_hits, 'boost',
+        i => { sp.boosters.splice(i, 1); edit(); }, v => { sp.boosters.push(v); edit(); }, '+ booster, Enter'),
+      chipRow('🚫 Exclude', 'A paper with one of these in its title or abstract is left out', sp.exclude || [], inf.exclude_hits, 'excl',
+        i => { sp.exclude.splice(i, 1); edit(); }, v => { sp.exclude.push(v); edit(); }, '+ exclude, Enter'),
+      h('div', {class: 'small'}, sp.power_nw ? `⚡ power ≤ ${sp.power_nw} nW boosts the ranking · ` : '', (sp.seeds || []).length ? `🌱 ${sp.seeds.length} seed DOI(s) · ` : '',
+        inf.pool ? h('b', {}, `Local pool: 🏛️ ${fmt(inf.pool.classic)} classic candidates (< ${inf.pool.split}) · 🚀 ${fmt(inf.pool.recent)} recent (≥ ${inf.pool.split})`) : '',
+        inf.pool ? h('span', {class: 'muted'}, ' in your store; the dive adds OpenAlex' + (ST.env.has_ieee_key ? ' and IEEE' : '')) : ''),
+      sp.note ? h('div', {class: 'warn small'}, '⚠️ ' + sp.note) : null,
+      (inf.core_hits || []).some(n => n === 0) ? h('div', {class: 'warn small'}, '⚠️ A core group has 0 local hits: check its spelling, or move it to the boosters.') : null] : null);
   const zbox = h('input', {type: 'checkbox', onchange: e => { TZERO = e.target.checked; }});
   zbox.checked = TZERO || noClaude; zbox.disabled = noClaude;
   const tp = S.topic = S.topic || {min_year: 0, recent_from_year: 2023, n_classic: 6, n_recent: 8};
@@ -3069,6 +3191,7 @@ function renderTopic() {
     h('td', {}, h('b', {}, (t.retired ? '🏺 ' : '🔎 ') + t.query), t.retired ? h('span', {class: 'tag'}, '🏺 Antique') : null, h('div', {class: 'muted small'}, t.date)),
     h('td', {class: 'small nowrap', title: `${t.n_classic} foundational classics + ${t.n_recent} recent SOTA papers`}, `${t.n_classic}🏛️ + ${t.n_recent}🚀`),
     h('td', {class: 'nowrap'}, t.href ? h('a', {class: 'btn small', href: t.href, target: '_blank'}, '📄 Report') : h('span', {class: 'muted small'}, 'no report'),
+      h('button', {class: 'btn small', title: 'Load this dive\'s title, scope, years and planned concepts into the form above to refine and run it again', onclick: () => editDive(t)}, '✏️ Edit / Re-run'),
       h('button', {class: 'btn small', title: 'Open ＋ Add New Pillar, pre-filled with this dive\'s title, words and 🏛️ classic DOIs (as anchors)',
                    disabled: KW && KW.pillars.length >= D.max_pillars, onclick: () => promoteDive(t)}, '📌 Promote Dive to Weekly Pillar'),
       t.retired ? h('button', {class: 'btn small primary', 'data-run': 'unretire_topic', title: API ? 'Bring this dive back to 🔎 Topic Dives' : `Not connected to the radar server: shows the command (briefing.py --unretire-topic ${t.slug})`, onclick: () => retireTopic(t, true)}, '↺ Restore')
@@ -3076,16 +3199,20 @@ function renderTopic() {
       h('button', {class: 'btn small danger', 'data-run': 'drop_topic', title: 'Delete permanently (the papers lose this dive\'s badge; marks, notes and report files stay)' + (API ? '' : ` · not connected: shows the command (briefing.py --drop-topic ${t.slug})`), onclick: () => dropTopic(t)}, '🗑'))))))
     : h('p', {class: 'muted small'}, 'No topic dives yet.');
   fill(el, h('h2', {}, '🔎 Topic Deep-Dive & Local Recall', h('span', {class: 'muted small'}, 'any research question, classics + state of the art')),
-    h('div', {class: 'row'}, inp), years,
+    h('div', {class: 'tform'}, h('label', {class: 'flabel', for: 'ttitle'}, '① Topic Title ', h('span', {class: 'muted small'}, 'short English label for the dropdown, the report and the file name')), tin,
+      h('label', {class: 'flabel', for: 'topicq'}, '② Scope & requirements ', h('span', {class: 'muted small'}, '1–4 sentences: the circuit or mechanism, metrics or power range, classic vs. state of the art, and what to exclude')), inp, seeds),
+    planBox, years,
     h('div', {class: 'row'}, btn('topic_recall'), btn('topic_dive', true),
       h('label', {class: 'small', title: noClaude ? 'No Claude CLI found: dives always run in 0-token mode' : 'Skip the claude -p synthesis: ranked tables + lineage map only'},
         zbox, noClaude ? (ST.env.has_claude ? ' 0-Token Fast Mode (Claude AI is 🧮 Draft in Step 5)' : ' 0-Token Fast Mode (no Claude CLI found)') : ' 0-Token Fast Mode (--no-claude)')),
-    h('div', {class: 'muted small', id: 'topicgroups'}, API ? 'Type a question to see how it is split into concept groups.' : ''),
+
     h('p', {class: 'muted small'}, `⚡ Recall: your local store, 0 API calls · 🔎 Deep-Dive: + OpenAlex, ${tp.n_classic} classics ` +
       (tp.min_year ? `(${tp.min_year}–${tp.recent_from_year - 1})` : `(before ${tp.recent_from_year})`) + ` + ${tp.n_recent} recent papers (${tp.recent_from_year} on). The years and counts are saved with the run.`),
     howBox('⚡ Recall searches your whole local store (archived papers and the corpus included): 0 API calls, 0 tokens. ' +
       '🔎 Deep-Dive adds OpenAlex' + (ST.env.has_ieee_key ? ', the IEEE topic reserve' : '') + ` (and PubMed for BioMed), picks ${tp.n_classic} 🏛️ classics + ${tp.n_recent} 🚀 recent papers, ` +
-      'writes Topic_Dives/<date>_<topic>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives.'),
+      'writes Topic_Dives/<date>_<title>.html with a lineage map and adds the dive to the dashboard\'s 🔎 Topic Dives. ' +
+      'Only the 🎯 core groups gate a paper (all but one must match, so terse classic abstracts still count); 🚀 boosters and 🌱 seed DOIs only rank; 🚫 excludes filter out. ' +
+      '🪄 Plan Concepts works offline at 0 tokens; ✨ AI Extract reads any language (one haiku call) and always answers in English.'),
     result,
     h('h3', {}, `Existing Topic Dives (${T.dives.length})`), offline, dives,
     T.recalls.length ? h('p', {class: 'small'}, 'Recent recalls: ', T.recalls.map(r => h('a', {href: r.href, target: '_blank', class: 'tag'}, r.name.replace(/^\d{4}-\d\d-\d\d_recall_/, '')))) : null);
