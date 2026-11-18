@@ -88,7 +88,8 @@ PATHS = {"pillars": ["pillars"], "pillar_short": ["pillar_short"], "positive_key
          "claude_mode": ["claude", "mode"]}  # v3.4.0: 🔑 Optional boosters → Claude AI (drafter.py)
 CLAUDE_MODES = ("draft", "hybrid", "full")
 TOPIC_KEYS = {"min_year": (0, 2100), "recent_from_year": (1950, 2100), "n_classic": (1, 20), "n_recent": (1, 20)}  # v3.2.3
-DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos")
+DATA_REPO_KEYS = ("peer_id", "share_curation", "share_tags", "share_notes", "adopt_external", "remote_url", "read_repos",
+                  "git_name", "git_email")
 # v3.2.0: the two Friday slots (config.json "schedule"); the day is locked to Friday for now
 SCHEDULE_DEFAULTS = {"auto_update_local": True, "update_time": "07:00", "auto_upload_repo": True, "upload_time": "12:00"}
 TIME_RX = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -231,6 +232,7 @@ def editable(cfg):
                          "share_notes": dr.get("share_notes", True) is not False,
                          "adopt_external": dr.get("adopt_external", True) is not False,
                          "remote_url": dr.get("remote_url") or "",
+                         "git_name": dr.get("git_name") or "", "git_email": dr.get("git_email") or "",
                          # v3.0.4: the repos as chips, and per repo its merge options (folded back by collect())
                          "read_repos": [e["spec"] for e in _read_entries(cfg)],
                          "read_opts": {e["spec"]: {"merge_corpus": e["merge"], "force_merge": e["force"]}
@@ -459,6 +461,18 @@ def validate(upd, cfg):
                     put(["data_repo", kk], lambda vv=vv: vv.strip() if isinstance(vv, str) and (
                         not vv.strip() or store_mod.PEER_ID_RX.match(vv.strip())) else _fail(
                             "data_repo.peer_id: letters, digits, '.', '_' or '-' (≤ 39), starting with a letter or digit"))
+                elif kk == "git_name":  # v3.4.3: the name on the data-repo commits
+                    put(["data_repo", kk], lambda vv=vv: vv.strip() if isinstance(vv, str) and len(vv.strip()) <= 80
+                        and not re.search(r"[<>\r\n\0]", vv) else _fail("data_repo.git_name: up to 80 characters, no < >"))
+                elif kk == "git_email":  # v3.4.3: the e-mail on the data-repo commits (GitHub links commits by it)
+                    def gmail(vv=vv):
+                        import data_repo
+                        if not isinstance(vv, str):
+                            return _fail("data_repo.git_email: expected text")
+                        if vv.strip() and not data_repo.EMAIL_RX.match(vv.strip()):
+                            return _fail("data_repo.git_email: an e-mail address like 12345+you@users.noreply.github.com")
+                        return vv.strip()
+                    put(["data_repo", kk], gmail)
                 elif kk in DATA_REPO_KEYS:
                     put(["data_repo", kk], lambda vv=vv, kk=kk: _bool(vv, f"data_repo.{kk}"))
                 else:
@@ -878,6 +892,10 @@ def data_repo_status(cfg):
                 continue
     else:
         out["me"] = data_repo.peer_id(cfg, None)
+    try:  # v3.4.3: who the sync commits are signed as
+        out["identity"] = data_repo.git_identity(cfg, None if why else repo)
+    except Exception:
+        out["identity"] = None
     for f in sorted((root / "Peers").glob("DASHBOARD_*.html")) if (root / "Peers").exists() else []:
         pid = f.stem[len("DASHBOARD_"):]
         seen.setdefault(pid, {"id": pid, "rows": None, "updated": "", "pillars": [], "me": False})
@@ -3427,6 +3445,20 @@ function mergeToggle(x) {
   const mode = x.mode === 'merged' ? h('span', {class: 'tag'}, '🔀 Merged into my corpus') : h('span', {class: 'tag'}, '🔒 Isolated dashboard');
   return h('div', {}, mode, h('label', {class: 'small', title: x.sim ? '' : 'after the next 📥 Read'}, box, ' Merge & Sync Corpus'));
 }
+function gitIdentity(dro, dr) {  // v3.4.3: the name / e-mail on this radar's commits to the data repo
+  const id = dr.identity, src = id && id.source;
+  const now = !id ? null : src === 'placeholder'
+    ? h('span', {class: 'warn'}, `⚠️ Commits are signed as ${id.name} <${id.email}>: a placeholder, so GitHub shows them without your profile and you are not listed as a contributor.`)
+    : h('span', {class: 'ok'}, `✅ Commits are signed as ${id.name} <${id.email}>` + (src === 'git' ? ' (this computer’s git config)' : ''));
+  const em = h('input', {class: 'in mono', style: 'max-width:420px', type: 'email', value: dro.git_email || '', placeholder: '12345678+your-login@users.noreply.github.com',
+    'aria-label': 'Git e-mail', oninput: e => { dro.git_email = e.target.value.trim(); changed(); }});
+  return h('div', {class: 'field'}, h('span', {class: 'flabel'}, '✍️ Git identity for repo commits ', h('span', {class: 'muted small'}, '(links your uploads to your GitHub account)')),
+    h('div', {class: 'row'},
+      h('input', {class: 'in', style: 'max-width:220px', maxlength: 80, value: dro.git_name || '', placeholder: 'name (e.g. your GitHub login)', 'aria-label': 'Git name',
+        oninput: e => { dro.git_name = e.target.value; changed(); }}), em),
+    h('p', {class: 'muted small'}, 'GitHub credits a commit to the account whose e-mail it carries. Use your GitHub no-reply address (github.com/settings/emails → “Keep my email addresses private” shows it, like 12345678+login@users.noreply.github.com) or another e-mail verified on your account. This is not the ✉️ Contact E-mail of Step 1, which only goes to Crossref / OpenAlex. Empty = this computer’s git config, or a placeholder if it has none. Used only for the radar’s own commits; no git config is changed.'),
+    now ? h('p', {class: 'small'}, now) : null);
+}
 function renderRepo() {
   const dr = ST.data_repo;
   const head = dr.connected
@@ -3471,7 +3503,7 @@ function renderRepo() {
   const ax = STARTER ? S.arxiv : null;
   const rr = (dr.read_repos || []);
   const reads = h('div', {}, h('h3', {}, '📚 Shared repos to read (data_repo.read_repos)'),
-    h('p', {class: 'small muted'}, 'Repos collaborators shared with you (read access is enough): pulled only, never pushed; isolated by default.'),
+    h('p', {class: 'small muted'}, 'OTHER teams’ data repos you only want to look at (read access is enough). They are downloaded, never pushed to, and by default each one is a separate dashboard (📚 Switch Radar / Repo) that adds nothing to your own papers. Not needed for your own team’s repo: that one is remote_url above.'),
     howBox('Private data repos your collaborators shared with you (read access is enough): pulled into <data_repo_dir>_peers/ and never pushed. Each one is an isolated dashboard by default (📚 Switch Radar / Repo in the dashboard header; 0 papers enter your store); merge a similar-domain repo into your corpus with “Merge & Sync Corpus”. owner/name, a clone URL or a local folder.'),
     chips(dro.read_repos, {placeholder: 'colleague/their-paper-radar-data, a clone URL or a folder', long: true,
       check: v => (/^[A-Za-z0-9][\w.-]*\/[\w.-]+$/.test(v) || /^(https:\/\/[A-Za-z0-9.-]+\/|git@[A-Za-z0-9.-]+:)[\w.-]+\/[\w.-]+$/.test(v) || /[\\/]/.test(v)) ? null : 'owner/name, https://…, git@… or a folder'}),
@@ -3487,12 +3519,15 @@ function renderRepo() {
       : (dro.read_repos.length ? 'Read works now (shared repos only); Full Sync needs your own repo: 📦 Clone / Init below.' : 'Solo use works without a repo. For a team: 📦 Clone / Init below.')),
     head,
     h('h3', {}, 'My sharing'), h('p', {id: 'sharestats', class: 'small'}),
-    h('label', {class: 'field'}, h('span', {class: 'flabel'}, 'peer_id ', h('span', {class: 'muted small'}, '(your name in the shared repo)')),
+    h('label', {class: 'field'}, h('span', {class: 'flabel'}, '👤 peer_id ', h('span', {class: 'muted small'}, '(your nickname inside the shared repo)')),
       h('input', {class: 'in', maxlength: 39, style: 'max-width:360px', value: dro.peer_id, placeholder: dr.me || 'your-name',
         title: 'Your name in the shared repo (peers/<peer_id>.json). Empty = the clone\'s git user.name.', oninput: e => { dro.peer_id = e.target.value.trim(); changed(); }})),
-    h('label', {class: 'field'}, h('span', {class: 'flabel'}, 'remote_url ', h('span', {class: 'muted small'}, '(your primary private data repo)')),
-      ta({class: 'in mono', value: dro.remote_url, placeholder: 'https://github.com/you/your-paper-radar-data.git',
-        title: 'Your primary private data repo. A new computer clones it into paths.data_repo_dir automatically.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}, {single: ''})),
+    h('p', {class: 'muted small'}, 'How your colleagues see you: your marks are published as peers/<peer_id>.json and show up for them as “👥 <peer_id>’s Radar”. Any short name (e.g. sli25). It is not a GitHub login and needs no account.'),
+    gitIdentity(dro, dr),
+    h('label', {class: 'field'}, h('span', {class: 'flabel'}, '🔗 remote_url ', h('span', {class: 'muted small'}, '(the ONE shared repo you sync with: read and write)')),
+      ta({class: 'in mono', value: dro.remote_url, placeholder: 'https://github.com/owner/their-paper-radar-data.git',
+        title: 'The primary data repo: pulled on 📥 Read and pushed to on 🔄 Full Sync / Fridays.', oninput: e => { dro.remote_url = e.target.value.trim(); changed(); }}, {single: ''})),
+    h('p', {class: 'muted small'}, 'The GitHub repo this radar both pulls from and pushes to (📥 Read, 🔄 Full Sync and the Friday upload). Your team shares one: the owner creates it (📦 Clone / Init → Option 1) and invites the others with write access; everyone else puts the same URL here (Option 2 fills it in). You need write access to push. A new computer with this URL clones the repo automatically. Empty = solo use, nothing is shared.'),
     h('div', {class: 'row'}, toggle(dro, 'share_tags', '🏷️ Share my curated tags & peer radar (✅ / ⭐ / 🔬 / Pillars) to the shared repo',
         'data_repo.share_tags: write peers/<peer_id>.json so collaborators see your radar. Off: syncs still pull peers and share clean papers, and your peers/<peer_id>.json is removed from the repo in the next sync.')),
     h('p', {class: 'muted small'}, '🔒 Your 🏷️ text notes (user_note) stay on this computer unless “share my 🏷️ notes” is ticked, and never leave it while tag sharing is off.'),

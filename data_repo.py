@@ -143,13 +143,39 @@ def _gain(remote, new):
     return added, better
 
 
-def _identity(repo, me):
-    """git -c options for the sync commit when this computer has no git identity (a fresh Git install): commit as
-    the peer id with a placeholder address, set for that one commit only (nothing is written to any git config)."""
-    have = [_git(repo, "config", k, check=False).stdout.strip() for k in ("user.name", "user.email")]
-    if all(have):
+EMAIL_RX = re.compile(r"^[^@\s<>\"',;]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}$")
+PLACEHOLDER_DOMAIN = "ic-paper-radar.local"
+
+
+def git_identity(cfg, repo):
+    """v3.4.3: who the data-repo commits are signed as → {name, email, source}. source = 'radar'
+    (data_repo.git_name / git_email in STARTUP.html Step 2), 'git' (this computer's git config) or 'placeholder'
+    (<peer_id>@ic-paper-radar.local: GitHub cannot link such a commit to anyone's account)."""
+    d = cfg.get("data_repo") or {}
+    me = peer_id(cfg, repo)
+
+    def conf(k):
+        try:
+            return _git(repo if repo else Path.home(), "config", *([] if repo else ["--global"]), k,
+                        check=False).stdout.strip()
+        except RuntimeError:
+            return ""
+    name, email = str(d.get("git_name") or "").strip(), str(d.get("git_email") or "").strip()
+    if email and EMAIL_RX.match(email):
+        return {"name": name or conf("user.name") or me, "email": email, "source": "radar"}
+    gname, gmail = conf("user.name"), conf("user.email")
+    if gname and gmail:
+        return {"name": name or gname, "email": gmail, "source": "git"}
+    return {"name": name or me, "email": f"{me}@{PLACEHOLDER_DOMAIN}", "source": "placeholder"}
+
+
+def _identity(repo, me, cfg=None):
+    """git -c options for one sync commit (nothing is written to any git config): the Step 2 Git name / e-mail
+    when set; else none when this computer has a git identity; else the peer id with a placeholder address."""
+    i = git_identity(cfg or {}, repo)
+    if i["source"] == "git" and not str((cfg or {}).get("data_repo", {}).get("git_name") or "").strip():
         return []
-    return ["-c", f"user.name={me}", "-c", f"user.email={me}@ic-paper-radar.local"]
+    return ["-c", f"user.name={i['name']}", "-c", f"user.email={i['email']}"]
 
 
 def check_clone(repo, cfg=None):
@@ -518,7 +544,7 @@ def init_repo(spec, store, store_path, cfg, secrets=(), log=print):
         if share_tags(cfg):
             write_overlay(store, cfg, repo, me, secrets)
         _git(repo, "add", "-A")
-        _git(repo, *_identity(repo, me), "commit", "-m", f"Initialize IC Paper Radar data repo (protocol v{PROTOCOL})")
+        _git(repo, *_identity(repo, me, cfg), "commit", "-m", f"Initialize IC Paper Radar data repo (protocol v{PROTOCOL})")
         _git(repo, "branch", "-M", "main")
         r = _git(repo, "push", "-u", "origin", "main", check=False)
         if r.returncode:
@@ -621,7 +647,7 @@ def _round(store, store_path, cfg, repo, me, adopt, secrets, push, log):
     what += [f"{me}'s radar ({ov_rows} rows)"] if ov_changed else []
     what += [f"{me}'s radar unpublished"] if ov_removed else []
     what += ["repo domain metadata"] if marker_changed else []
-    _git(repo, *_identity(repo, me), "commit", "-m", f"Sync shared corpus ({'; '.join(what)})")
+    _git(repo, *_identity(repo, me, cfg), "commit", "-m", f"Sync shared corpus ({'; '.join(what)})")
     if not push:
         log("  4. committed locally (no push)")
         return True, s["papers"], peers
