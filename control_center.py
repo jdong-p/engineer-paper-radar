@@ -2146,8 +2146,9 @@ CSS = r"""
 .tplanrow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}.tplabel{font-weight:600;min-width:8.5em}
 .chip.core{border-color:var(--accent)}.chip.excl{text-decoration:line-through;text-decoration-color:var(--warn)}.chip.excl .t{text-decoration:inherit}
 .chip.zero{border-color:var(--warn);color:var(--warn)}.in.w14{width:14em}
+.gid{flex:1 1 220px;min-width:0;max-width:420px;width:100%}
 .tplanrow>*{min-width:0;max-width:100%}.tplan .chip .t{white-space:normal;overflow-wrap:anywhere}
-@media (max-width:560px){.tplabel{min-width:0;flex-basis:100%}.in.w14{flex:1 1 100%;width:auto}#topicq,#ttitle,.ccp .tform .in,.ccp .tplan .in{font-size:16px}}
+@media (max-width:560px){.tplabel{min-width:0;flex-basis:100%}.in.w14{flex:1 1 100%;width:auto}#topicq,#ttitle,.ccp .tform .in,.ccp .tplan .in,.ccp .in.gid{font-size:16px}.gid{flex-basis:100%;max-width:none}}
 .vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;margin:10px 0}
 .vcard{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--bg);display:flex;flex-direction:column;gap:4px;min-width:0}
 .vcard.flag{border-color:var(--cite);box-shadow:inset 3px 0 0 var(--cite)}.vtop{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}
@@ -3450,11 +3451,11 @@ function gitIdentity(dro, dr) {  // v3.4.3: the name / e-mail on this radar's co
   const now = !id ? null : src === 'placeholder'
     ? h('span', {class: 'warn'}, `⚠️ Commits are signed as ${id.name} <${id.email}>: a placeholder, so GitHub shows them without your profile and you are not listed as a contributor.`)
     : h('span', {class: 'ok'}, `✅ Commits are signed as ${id.name} <${id.email}>` + (src === 'git' ? ' (this computer’s git config)' : ''));
-  const em = h('input', {class: 'in mono', style: 'max-width:420px', type: 'email', value: dro.git_email || '', placeholder: '12345678+your-login@users.noreply.github.com',
+  const em = h('input', {class: 'in mono gid', type: 'email', value: dro.git_email || '', placeholder: 'GitHub no-reply e-mail', title: 'e.g. 12345678+your-login@users.noreply.github.com',
     'aria-label': 'Git e-mail', oninput: e => { dro.git_email = e.target.value.trim(); changed(); }});
   return h('div', {class: 'field'}, h('span', {class: 'flabel'}, '✍️ Git identity for repo commits ', h('span', {class: 'muted small'}, '(links your uploads to your GitHub account)')),
     h('div', {class: 'row'},
-      h('input', {class: 'in', style: 'max-width:220px', maxlength: 80, value: dro.git_name || '', placeholder: 'name (e.g. your GitHub login)', 'aria-label': 'Git name',
+      h('input', {class: 'in gid', maxlength: 80, value: dro.git_name || '', placeholder: 'Name (your GitHub login)', 'aria-label': 'Git name',
         oninput: e => { dro.git_name = e.target.value; changed(); }}), em),
     h('p', {class: 'muted small'}, 'GitHub credits a commit to the account whose e-mail it carries. Use your GitHub no-reply address (github.com/settings/emails → “Keep my email addresses private” shows it, like 12345678+login@users.noreply.github.com) or another e-mail verified on your account. This is not the ✉️ Contact E-mail of Step 1, which only goes to Crossref / OpenAlex. Empty = this computer’s git config, or a placeholder if it has none. Used only for the radar’s own commits; no git config is changed.'),
     now ? h('p', {class: 'small'}, now) : null);
